@@ -101,6 +101,13 @@ export class RenderEngine {
     }
     const navigationMs = Date.now() - t0;
 
+    if (nav.settleMs > 0) {
+      await page.evaluate(
+        (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        nav.settleMs,
+      );
+    }
+
     let html: string;
     try {
       html = await page.content();
@@ -120,6 +127,11 @@ export class RenderEngine {
 
     const title = await page.title();
     const finalUrl = page.url();
+    const visibleText = await page.evaluate(() => {
+      const b = document.body;
+      if (!b) return '';
+      return b.innerText.length > 100_000 ? b.innerText.slice(0, 100_000) : b.innerText;
+    });
     const screenshots = new Map<string, Buffer>();
     const screenshotMimes = new Map<string, string>();
 
@@ -150,6 +162,7 @@ export class RenderEngine {
       finalUrl,
       title,
       html,
+      visibleText,
       navigationMs,
       createdAt: Date.now(),
       screenshots,

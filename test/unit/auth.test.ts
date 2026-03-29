@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
-import { encodeUrlToToken } from '../../src/encode.js';
-
 describe('API key auth', () => {
   it('returns 401 without key when REBOX_API_KEYS is set', async () => {
     const cfg = loadConfig({
@@ -12,10 +10,9 @@ describe('API key auth', () => {
       REBOX_API_KEYS: 'secret-key',
     });
     const { app } = await buildApp(cfg, { logger: false });
-    const token = encodeUrlToToken('https://example.com/');
     const res = await app.inject({
       method: 'GET',
-      url: `/rebox/${token}/text`,
+      url: `/rebox/text?${new URLSearchParams({ url: 'https://example.com/' }).toString()}`,
     });
     await app.close();
     expect(res.statusCode).toBe(401);

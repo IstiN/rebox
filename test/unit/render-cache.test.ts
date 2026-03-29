@@ -10,6 +10,7 @@ function nav(url: string): NavParams {
     timeoutMs: 30_000,
     viewportW: 1280,
     viewportH: 720,
+    settleMs: 0,
   };
 }
 
@@ -33,6 +34,7 @@ describe('RenderSnapshotCache', () => {
       finalUrl: 'https://x',
       title: 't',
       html: '<html></html>',
+      visibleText: '',
       navigationMs: 1,
       createdAt: Date.now(),
       screenshots: new Map(),
@@ -62,6 +64,7 @@ describe('RenderSnapshotCache', () => {
       finalUrl: 'https://y',
       title: 't',
       html: '<html></html>',
+      visibleText: '',
       navigationMs: 1,
       createdAt: Date.now(),
       screenshots: new Map(),

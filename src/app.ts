@@ -3,7 +3,6 @@ import { z } from 'zod';
 
 import type { Config } from './config.js';
 import { runDefuddle } from './defuddle-service.js';
-import { DecodeError, decodeUrlToken } from './encode.js';
 import { errorBody, newRequestId, ReboxHttpError, type ErrorCode } from './errors.js';
 import { ifNoneMatchMatches, weakEtag } from './etag.js';
 import { asciiHeaderValue } from './headers-util.js';
@@ -16,10 +15,12 @@ import { extractYoutubeVideoId } from './youtube.js';
 import { loadYoutubeTranscript } from './youtube-transcript-service.js';
 
 const navQueryBase = z.object({
+  url: z.string().min(1, 'url query parameter is required'),
   wait_until: z.enum(['load', 'domcontentloaded', 'networkidle']).optional(),
   timeout_ms: z.coerce.number().min(1000).max(120_000).optional(),
   viewport_w: z.coerce.number().int().positive().max(4096).optional(),
   viewport_h: z.coerce.number().int().positive().max(4096).optional(),
+  settle_ms: z.coerce.number().int().min(0).max(30_000).optional(),
   locale: z.string().max(64).optional(),
   user_agent: z.string().max(1024).optional(),
 });
@@ -40,6 +41,10 @@ const imageQuerySchema = navQueryBase.extend({
   quality: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+const audioQuerySchema = navQueryBase.pick({ url: true }).extend({
+  lang: z.string().max(32).optional(),
+});
+
 function flattenQuery(q: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(q)) {
@@ -48,17 +53,36 @@ function flattenQuery(q: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-function parseNav(urlString: string, raw: Record<string, unknown>): NavParams {
-  const o = navQueryBase.parse(raw);
+function parseNavParams(
+  href: string,
+  o: z.infer<typeof navQueryBase>,
+  cfg: Config,
+): NavParams {
   return {
-    url: urlString,
-    waitUntil: o.wait_until ?? 'networkidle',
-    timeoutMs: o.timeout_ms ?? 30_000,
+    url: href,
+    waitUntil: o.wait_until ?? 'domcontentloaded',
+    timeoutMs: o.timeout_ms ?? 60_000,
     viewportW: o.viewport_w ?? 1280,
     viewportH: o.viewport_h ?? 720,
+    settleMs: o.settle_ms ?? cfg.defaultSettleMs,
     locale: o.locale,
     userAgent: o.user_agent,
   };
+}
+
+function assertParsableAbsoluteUrl(href: string): void {
+  try {
+    const u = new URL(href);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      throw new ReboxHttpError('INVALID_URL', 'URL must be http(s)', 400);
+    }
+    if (!u.host) {
+      throw new ReboxHttpError('INVALID_URL', 'URL must include a host', 400);
+    }
+  } catch (e) {
+    if (e instanceof ReboxHttpError) throw e;
+    throw new ReboxHttpError('INVALID_URL', 'Malformed URL', 400);
+  }
 }
 
 export interface AppBundle {
@@ -117,13 +141,8 @@ export async function buildApp(
       reply.status(err.status).send(errorBody(err.code, err.message, requestId, err.details));
       return;
     }
-    if (err instanceof DecodeError) {
-      reply.status(400).send(errorBody('INVALID_ENCODING', err.message, requestId));
-      return;
-    }
     if (err instanceof SsrfError) {
-      const status = err.code === 'DNS_REBINDING' ? 400 : 400;
-      reply.status(status).send(errorBody(err.code as ErrorCode, err.message, requestId));
+      reply.status(400).send(errorBody(err.code as ErrorCode, err.message, requestId));
       return;
     }
     req.log.error(err);
@@ -141,146 +160,137 @@ export async function buildApp(
     }
   });
 
-  app.get<{ Params: { encodedUrl: string } }>(
-    '/rebox/:encodedUrl/text',
-    async (req, reply) => {
-      const requestId = req.id;
-      const href = decodeUrlToken(req.params.encodedUrl);
-      await assertSafeUrl(href, cfg);
+  app.get('/rebox/text', async (req, reply) => {
+    const requestId = req.id;
+    const q = textQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const href = q.url.trim();
+    assertParsableAbsoluteUrl(href);
+    await assertSafeUrl(href, cfg);
+    const nav = parseNavParams(href, q, cfg);
 
-      const q = textQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
-      const nav = parseNav(href, q);
+    const { snapshot } = await resolveRender(cache, engine, nav, null);
 
-      const { snapshot } = await resolveRender(cache, engine, nav, null);
+    const markdown = q.markdown !== 'false';
+    const separateMarkdown = q.separateMarkdown === 'true';
+    const includeRaw = q.includeRawHtml === 'true';
+    const maxRaw = q.maxRawHtmlChars ?? 200_000;
 
-      const markdown = q.markdown !== 'false';
-      const separateMarkdown = q.separateMarkdown === 'true';
-      const includeRaw = q.includeRawHtml === 'true';
-      const maxRaw = q.maxRawHtmlChars ?? 200_000;
+    const { article, defuddleMs } = await runDefuddle(cfg, snapshot.finalUrl, snapshot.html, {
+      markdown,
+      separateMarkdown,
+      language: q.locale,
+      contentSelector: q.content_selector,
+      debug: q.debug === 'true',
+    });
 
-      const { article, defuddleMs } = await runDefuddle(cfg, snapshot.finalUrl, snapshot.html, {
-        markdown,
-        separateMarkdown,
-        language: q.locale,
-        contentSelector: q.content_selector,
-        debug: q.debug === 'true',
-      });
+    const bodyObj = {
+      status: 'success' as const,
+      finalUrl: snapshot.finalUrl,
+      article,
+      visibleText: snapshot.visibleText,
+      rawHtml:
+        includeRaw && snapshot.html.length <= maxRaw
+          ? snapshot.html
+          : includeRaw
+            ? snapshot.html.slice(0, maxRaw)
+            : undefined,
+      timingsMs: {
+        navigation: snapshot.navigationMs,
+        defuddle: defuddleMs,
+      },
+      requestId,
+    };
 
-      const bodyObj = {
-        status: 'success' as const,
-        finalUrl: snapshot.finalUrl,
-        article,
-        rawHtml:
-          includeRaw && snapshot.html.length <= maxRaw
-            ? snapshot.html
-            : includeRaw
-              ? snapshot.html.slice(0, maxRaw)
-              : undefined,
-        timingsMs: {
-          navigation: snapshot.navigationMs,
-          defuddle: defuddleMs,
-        },
-        requestId,
-      };
+    const json = JSON.stringify(bodyObj);
+    const etag = weakEtag(json);
+    if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
+      reply.status(304).header('etag', etag).header('cache-control', 'private, max-age=60');
+      reply.header('x-rebox-final-url', snapshot.finalUrl);
+      return reply.send();
+    }
 
-      const json = JSON.stringify(bodyObj);
-      const etag = weakEtag(json);
-      if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
-        reply.status(304).header('etag', etag).header('cache-control', 'private, max-age=60');
-        reply.header('x-rebox-final-url', snapshot.finalUrl);
-        return reply.send();
-      }
+    reply
+      .header('etag', etag)
+      .header('cache-control', 'private, max-age=60')
+      .header('x-rebox-final-url', snapshot.finalUrl);
+    return reply.send(bodyObj);
+  });
 
+  app.get('/rebox/image', async (req, reply) => {
+    const q = imageQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const href = q.url.trim();
+    assertParsableAbsoluteUrl(href);
+    await assertSafeUrl(href, cfg);
+    const nav = parseNavParams(href, q, cfg);
+    const spec: ScreenshotSpec = {
+      format: q.format === 'webp' ? 'webp' : 'png',
+      fullPage: q.fullPage === 'true',
+      maxHeightPx: q.maxHeightPx,
+      quality: q.quality,
+    };
+
+    const { snapshot, image } = await resolveRender(cache, engine, nav, spec);
+    if (!image) {
+      throw new ReboxHttpError('INTERNAL', 'Image payload missing', 500);
+    }
+
+    const etag = weakEtag(image.buffer);
+    if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
       reply
-        .header('etag', etag)
-        .header('cache-control', 'private, max-age=60')
-        .header('x-rebox-final-url', snapshot.finalUrl);
-      return reply.send(bodyObj);
-    },
-  );
-
-  app.get<{ Params: { encodedUrl: string } }>(
-    '/rebox/:encodedUrl/image',
-    async (req, reply) => {
-      const href = decodeUrlToken(req.params.encodedUrl);
-      await assertSafeUrl(href, cfg);
-
-      const q = imageQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
-      const nav = parseNav(href, q);
-      const spec: ScreenshotSpec = {
-        format: q.format === 'webp' ? 'webp' : 'png',
-        fullPage: q.fullPage === 'true',
-        maxHeightPx: q.maxHeightPx,
-        quality: q.quality,
-      };
-
-      const { snapshot, image } = await resolveRender(cache, engine, nav, spec);
-      if (!image) {
-        throw new ReboxHttpError('INTERNAL', 'Image payload missing', 500);
-      }
-
-      const etag = weakEtag(image.buffer);
-      if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
-        reply
-          .status(304)
-          .header('etag', etag)
-          .header('cache-control', 'private, max-age=60')
-          .header('x-rebox-final-url', snapshot.finalUrl)
-          .header('x-rebox-title', asciiHeaderValue(snapshot.title));
-        return reply.send();
-      }
-
-      reply
+        .status(304)
         .header('etag', etag)
         .header('cache-control', 'private, max-age=60')
         .header('x-rebox-final-url', snapshot.finalUrl)
-        .header('x-rebox-title', asciiHeaderValue(snapshot.title))
-        .header('x-rebox-timing-navigation-ms', String(snapshot.navigationMs))
-        .header('content-disposition', 'inline; filename="rebox.png"')
-        .type(image.mimeType)
-        .send(image.buffer);
-    },
-  );
+        .header('x-rebox-title', asciiHeaderValue(snapshot.title));
+      return reply.send();
+    }
 
-  app.get<{ Params: { encodedUrl: string } }>(
-    '/rebox/:encodedUrl/audio',
-    async (req, reply) => {
-      const requestId = req.id;
-      const href = decodeUrlToken(req.params.encodedUrl);
-      await assertSafeUrl(href, cfg);
+    reply
+      .header('etag', etag)
+      .header('cache-control', 'private, max-age=60')
+      .header('x-rebox-final-url', snapshot.finalUrl)
+      .header('x-rebox-title', asciiHeaderValue(snapshot.title))
+      .header('x-rebox-timing-navigation-ms', String(snapshot.navigationMs))
+      .header('content-disposition', 'inline; filename="rebox.png"')
+      .type(image.mimeType)
+      .send(image.buffer);
+  });
 
-      const flat = flattenQuery(req.query as Record<string, unknown>);
-      const lang = typeof flat.lang === 'string' ? flat.lang : undefined;
+  app.get('/rebox/audio', async (req, reply) => {
+    const requestId = req.id;
+    const q = audioQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const href = q.url.trim();
+    assertParsableAbsoluteUrl(href);
+    await assertSafeUrl(href, cfg);
 
-      const videoId = extractYoutubeVideoId(href);
-      if (!videoId) {
-        throw new ReboxHttpError('TRANSCRIPT_UNAVAILABLE', 'Not a YouTube URL', 404);
-      }
+    const videoId = extractYoutubeVideoId(href);
+    if (!videoId) {
+      throw new ReboxHttpError('TRANSCRIPT_UNAVAILABLE', 'Not a YouTube URL', 404);
+    }
 
-      const t0 = Date.now();
-      const { segments } = await loadYoutubeTranscript(href, lang);
-      const fetchMs = Date.now() - t0;
+    const t0 = Date.now();
+    const { segments } = await loadYoutubeTranscript(href, q.lang);
+    const fetchMs = Date.now() - t0;
 
-      const bodyObj = {
-        videoId,
-        title: undefined as string | undefined,
-        language: lang,
-        segments,
-        timingsMs: { fetch: fetchMs },
-        requestId,
-      };
+    const bodyObj = {
+      videoId,
+      title: undefined as string | undefined,
+      language: q.lang,
+      segments,
+      timingsMs: { fetch: fetchMs },
+      requestId,
+    };
 
-      const json = JSON.stringify(bodyObj);
-      const etag = weakEtag(json);
-      if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
-        reply.status(304).header('etag', etag).header('cache-control', 'private, max-age=300');
-        return reply.send();
-      }
+    const json = JSON.stringify(bodyObj);
+    const etag = weakEtag(json);
+    if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
+      reply.status(304).header('etag', etag).header('cache-control', 'private, max-age=300');
+      return reply.send();
+    }
 
-      reply.header('etag', etag).header('cache-control', 'private, max-age=300');
-      return reply.send(bodyObj);
-    },
-  );
+    reply.header('etag', etag).header('cache-control', 'private, max-age=300');
+    return reply.send(bodyObj);
+  });
 
   app.addHook('onClose', async () => {
     await engine.close();

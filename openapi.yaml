@@ -2,42 +2,22 @@ openapi: 3.0.3
 info:
   title: rebox
   description: |
-    **rebox** loads a **public URL** (decoded from the path token), then serves **text** (render + [Defuddle](https://github.com/kepano/defuddle)),
-    a **raster image** (viewport or full-page screenshot), or **captions/transcript** when the target is supported (e.g. YouTube).
+    **rebox** loads a **public URL** passed as a **query parameter** (`url`, use standard percent-encoding / `encodeURIComponent`),
+    then returns **text** (render + [Defuddle](https://github.com/kepano/defuddle) plus **`visibleText`** from the live DOM for SPAs),
+    a **raw screenshot** (`GET /rebox/image`), or **YouTube captions** (`GET /rebox/audio`).
 
-    ## URL token (`encodedUrl`)
+    **Example (browser-safe):**  
+    `GET /rebox/text?url=https%3A%2F%2Flearn.ai-native.pro%2F`
 
-    `encodedUrl` is **Base64URL** (RFC 4648) encoding of the **UTF-8** absolute URL string, **without padding** (`=` stripped).
-    Example: `https://example.com/page` → segment like `aHR0cHM6Ly9leGFtcGxlLmNvbS9wYWdl` (illustrative).
+    Defaults: `wait_until=domcontentloaded`, `timeout_ms=60000`, **`settle_ms`** defaults from env `REBOX_DEFAULT_SETTLE_MS` (default **2000** ms)
+    so client-rendered pages can hydrate before HTML/screenshot.
 
-    ## Image responses
+    Image body is raw PNG/WebP bytes; metadata in headers (`X-Rebox-Final-Url`, etc.).
 
-    `GET .../image` returns **only** the image bytes in the body (`Content-Type: image/png` or `image/webp`). Nothing is stored for the client;
-    the file is generated per request (or served from **server** cache). Metadata is carried in **response headers** (see operation).
+    Internal **snapshot cache** still dedupes `/text` and `/image` for the same URL + nav options.
 
-    ## Caching without one giant response
-
-    Returning **text + image + transcript** in a single JSON blob would be large and awkward for clients.
-
-    Splitting into **`/text`**, **`/image`**, **`/audio`** does **not** require three headless navigations if the server implements a **shared render snapshot**
-    keyed by `(decoded URL, normalized render options)`:
-
-    1. First request for that key runs **one** Playwright navigation, then stores (for a short TTL) e.g. final URL, rendered HTML, screenshot bytes, and any transcript fetch result.
-    2. Sibling requests (`/text` vs `/image`) **reuse** that snapshot: Defuddle runs on cached HTML; image bytes are streamed from cache.
-    3. HTTP **`ETag`** / **`Cache-Control`** (and optionally **`If-None-Match`**) let browsers and CDNs avoid re-downloading **identical** representations when policy allows.
-
-    Transcript-only flows (e.g. YouTube) may skip the browser entirely and use their own cache key.
-
-    **Note:** Authenticated responses are often uncacheable at shared CDNs unless you design a dedicated cache partition; the snapshot cache is primarily **inside** the service.
-
-    ## Libraries (implementation)
-
-    - Text: Playwright + `defuddle/node` + linkedom/JSDOM.
-    - YouTube captions: e.g. `youtube-transcript` / `youtube-transcript-api` (ToS + rate limits).
-    - Arbitrary audio URLs: STT provider of choice (out of band for many deployments).
-
-    Production: API key / mTLS / IAM. **SSRF** checks on every decoded URL.
-  version: 0.2.0
+    Production: `X-API-Key` when `REBOX_API_KEYS` is set. SSRF checks on every target URL.
+  version: 0.3.0
 
 servers:
   - url: https://rebox.example.com
@@ -58,7 +38,7 @@ paths:
       security: []
       responses:
         '200':
-          description: Service process is up
+          description: OK
           content:
             application/json:
               schema:
@@ -72,27 +52,28 @@ paths:
   /ready:
     get:
       tags: [health]
-      summary: Readiness (browser warm, dependencies OK)
+      summary: Readiness
       security: []
       responses:
         '200':
-          description: Ready to accept render jobs
+          description: Ready
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadyResponse'
         '503':
-          description: Not ready (e.g. browser still starting)
+          description: Not ready
 
-  /rebox/{encodedUrl}/text:
+  /rebox/text:
     get:
       tags: [rebox]
-      summary: Extracted article text (Defuddle) for decoded URL
+      summary: Render URL, extract article + visible plain text
       operationId: reboxText
       parameters:
-        - $ref: '#/components/parameters/EncodedUrl'
+        - $ref: '#/components/parameters/TargetUrl'
         - $ref: '#/components/parameters/WaitUntil'
         - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
         - $ref: '#/components/parameters/ViewportWidth'
         - $ref: '#/components/parameters/ViewportHeight'
         - $ref: '#/components/parameters/Locale'
@@ -108,31 +89,22 @@ paths:
           schema: { type: boolean, default: false }
         - name: maxRawHtmlChars
           in: query
-          schema: { type: integer, minimum: 1 }
-        - name: If-None-Match
-          in: header
-          required: false
+          schema: { type: integer }
+        - name: content_selector
+          in: query
           schema: { type: string }
-          description: Opaque ETag from a prior response; server may return 304 if unchanged.
+        - name: debug
+          in: query
+          schema: { type: boolean, default: false }
       responses:
         '200':
-          description: JSON article payload
-          headers:
-            ETag:
-              schema: { type: string }
-            Cache-Control:
-              schema: { type: string }
-              example: private, max-age=60
-            X-Rebox-Final-Url:
-              schema: { type: string, format: uri }
-            X-Rebox-Request-Id:
-              schema: { type: string }
+          description: JSON with `visibleText` (DOM) and Defuddle `article`
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReboxTextResponse'
         '304':
-          description: Not modified (when If-None-Match matches)
+          description: Not modified
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -146,20 +118,16 @@ paths:
         '502':
           $ref: '#/components/responses/BadGateway'
 
-  /rebox/{encodedUrl}/image:
+  /rebox/image:
     get:
       tags: [rebox]
-      summary: Screenshot bytes only (body is the image)
-      description: |
-        Response **body** is raw **PNG** or **WebP** bytes. No JSON, no base64, no multipart.
-
-        Use headers for metadata (`X-Rebox-Final-Url`, `X-Rebox-Title`, timings as hints). Clients that need JSON should call `/text` separately;
-        the server **may** reuse one navigation via the shared snapshot cache (see API description).
+      summary: Screenshot only (response body = image bytes)
       operationId: reboxImage
       parameters:
-        - $ref: '#/components/parameters/EncodedUrl'
+        - $ref: '#/components/parameters/TargetUrl'
         - $ref: '#/components/parameters/WaitUntil'
         - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
         - $ref: '#/components/parameters/ViewportWidth'
         - $ref: '#/components/parameters/ViewportHeight'
         - $ref: '#/components/parameters/Locale'
@@ -175,44 +143,13 @@ paths:
             default: png
         - name: maxHeightPx
           in: query
-          description: Cap full-page screenshot height (memory guard).
-          schema: { type: integer, minimum: 1 }
+          schema: { type: integer }
         - name: quality
           in: query
-          description: WebP quality 1–100.
           schema: { type: integer, minimum: 1, maximum: 100 }
-        - name: If-None-Match
-          in: header
-          required: false
-          schema: { type: string }
       responses:
         '200':
-          description: Raw image body
-          headers:
-            Content-Type:
-              schema:
-                type: string
-                enum: [image/png, image/webp]
-            Content-Disposition:
-              schema:
-                type: string
-                example: inline; filename="rebox.png"
-            ETag:
-              schema: { type: string }
-            Cache-Control:
-              schema: { type: string }
-              example: private, max-age=60
-            X-Rebox-Final-Url:
-              schema: { type: string, format: uri }
-            X-Rebox-Title:
-              schema: { type: string }
-              description: Best-effort document title (ASCII or UTF-8; avoid broken headers for exotic titles in implementation).
-            X-Rebox-Request-Id:
-              schema: { type: string }
-            X-Rebox-Timing-Navigation-Ms:
-              schema: { type: string }
-            X-Rebox-Timing-Screenshot-Ms:
-              schema: { type: string }
+          description: Raw image
           content:
             image/png:
               schema:
@@ -237,36 +174,19 @@ paths:
         '502':
           $ref: '#/components/responses/BadGateway'
 
-  /rebox/{encodedUrl}/audio:
+  /rebox/audio:
     get:
       tags: [rebox]
-      summary: Transcript / captions for media implied by URL
-      description: |
-        When `encodedUrl` decodes to a **YouTube** watch URL (or you pass a compatible target), return caption segments.
-        For arbitrary pages with embedded audio, behavior is **implementation-defined** (may return 404 `TRANSCRIPT_UNAVAILABLE` until supported).
-
-        This path typically **does not** need a browser if captions are fetched via an API library.
+      summary: YouTube transcript (non-YouTube URL → 404)
       operationId: reboxAudio
       parameters:
-        - $ref: '#/components/parameters/EncodedUrl'
+        - $ref: '#/components/parameters/TargetUrl'
         - name: lang
           in: query
-          description: Preferred caption language (BCP 47).
-          schema: { type: string }
-        - name: If-None-Match
-          in: header
-          required: false
           schema: { type: string }
       responses:
         '200':
           description: Transcript segments
-          headers:
-            ETag:
-              schema: { type: string }
-            Cache-Control:
-              schema: { type: string }
-            X-Rebox-Request-Id:
-              schema: { type: string }
           content:
             application/json:
               schema:
@@ -278,11 +198,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          description: No transcript available for this URL
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
+          description: No transcript / not YouTube
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '502':
@@ -296,29 +212,35 @@ components:
       name: X-API-Key
 
   parameters:
-    EncodedUrl:
-      name: encodedUrl
-      in: path
+    TargetUrl:
+      name: url
+      in: query
       required: true
-      description: Base64URL (no padding) of UTF-8 absolute URL.
+      description: Absolute http(s) URL, percent-encoded (e.g. `encodeURIComponent` in JavaScript).
       schema:
         type: string
-        pattern: '^[A-Za-z0-9_-]+$'
+        format: uri
     WaitUntil:
       name: wait_until
       in: query
       schema:
         type: string
         enum: [load, domcontentloaded, networkidle]
-        default: networkidle
+        default: domcontentloaded
     TimeoutMs:
       name: timeout_ms
       in: query
       schema:
         type: integer
-        minimum: 1000
-        maximum: 120000
-        default: 30000
+        default: 60000
+    SettleMs:
+      name: settle_ms
+      in: query
+      description: Extra ms to wait after navigation (hydration). Overrides `REBOX_DEFAULT_SETTLE_MS` when set.
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 30000
     ViewportWidth:
       name: viewport_w
       in: query
@@ -342,37 +264,37 @@ components:
 
   responses:
     BadRequest:
-      description: Invalid token, malformed URL, or SSRF block
+      description: Bad request / SSRF
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorBody'
     Unauthorized:
-      description: Missing or invalid API key
+      description: Unauthorized
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorBody'
     Timeout:
-      description: Navigation or overall deadline exceeded
+      description: Timeout
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorBody'
     PayloadTooLarge:
-      description: HTML or screenshot exceeds configured limits
+      description: Too large
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorBody'
     TooManyRequests:
-      description: Concurrency or rate limit exceeded
+      description: Rate limited
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorBody'
     BadGateway:
-      description: Upstream fetch or browser failure
+      description: Upstream / browser error
       content:
         application/json:
           schema:
@@ -383,114 +305,52 @@ components:
       type: object
       required: [code, message]
       properties:
-        code:
-          type: string
-          enum:
-            - INVALID_URL
-            - INVALID_ENCODING
-            - SSRF_BLOCKED
-            - DNS_REBINDING
-            - TIMEOUT
-            - NAVIGATION_FAILED
-            - BODY_TOO_LARGE
-            - SCREENSHOT_TOO_LARGE
-            - BROWSER_CRASH
-            - EXTRACTION_FAILED
-            - TRANSCRIPT_UNAVAILABLE
-            - TRANSCRIPTION_FAILED
-            - RATE_LIMITED
-            - UNAUTHORIZED
-            - INTERNAL
-        message:
-          type: string
-        requestId:
-          type: string
-        details:
-          type: object
-          additionalProperties: true
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+        details: { type: object, additionalProperties: true }
 
     ReadyResponse:
       type: object
       required: [status]
       properties:
-        status:
-          type: string
-          example: ready
-        browser:
-          type: string
-          example: chromium
+        status: { type: string }
+        browser: { type: string }
 
     ReboxTextResponse:
       type: object
-      required: [finalUrl, article, timingsMs]
+      required: [finalUrl, article, visibleText, timingsMs]
       properties:
-        finalUrl:
-          type: string
-          format: uri
+        status: { type: string, enum: [success] }
+        finalUrl: { type: string, format: uri }
         article:
           type: object
-          properties:
-            contentHtml:
-              type: string
-            contentMarkdown:
-              type: string
-            description:
-              type: string
-            author:
-              type: string
-            site:
-              type: string
-            domain:
-              type: string
-            language:
-              type: string
-            published:
-              type: string
-            wordCount:
-              type: integer
-            extractorType:
-              type: string
-            schemaOrgData:
-              type: object
-              additionalProperties: true
-        rawHtml:
+          additionalProperties: true
+        visibleText:
           type: string
+          description: Live DOM innerText (SPA-friendly)
+        rawHtml: { type: string }
         timingsMs:
           type: object
           properties:
-            navigation:
-              type: number
-            defuddle:
-              type: number
-        requestId:
-          type: string
+            navigation: { type: number }
+            defuddle: { type: number }
+        requestId: { type: string }
 
     ReboxAudioResponse:
       type: object
       required: [videoId, segments]
       properties:
-        videoId:
-          type: string
-        title:
-          type: string
-        language:
-          type: string
+        videoId: { type: string }
+        title: { type: string }
+        language: { type: string }
         segments:
           type: array
           items:
             type: object
-            required: [text]
             properties:
-              startSec:
-                type: number
-              durationSec:
-                type: number
-              text:
-                type: string
-        timingsMs:
-          type: object
-          properties:
-            fetch:
-              type: number
-        requestId:
-          type: string
+              startSec: { type: number }
+              durationSec: { type: number }
+              text: { type: string }
+        timingsMs: { type: object }
+        requestId: { type: string }

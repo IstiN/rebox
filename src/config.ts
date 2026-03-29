@@ -18,6 +18,7 @@ const envSchema = z.object({
   MAX_SCREENSHOT_BYTES: z.coerce.number().default(25_000_000),
   CACHE_TTL_MS: z.coerce.number().default(120_000),
   MAX_CONCURRENT_RENDERS: z.coerce.number().default(2),
+  REBOX_DEFAULT_SETTLE_MS: z.coerce.number().min(0).max(30_000).default(2000),
   ALLOW_HTTP: z
     .string()
     .optional()
@@ -32,6 +33,8 @@ export interface Config {
   maxScreenshotBytes: number;
   cacheTtlMs: number;
   maxConcurrentRenders: number;
+  /** Extra wait after navigation so SPAs can hydrate before HTML/screenshot. */
+  defaultSettleMs: number;
   allowHttp: boolean;
 }
 
@@ -45,6 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxScreenshotBytes: e.MAX_SCREENSHOT_BYTES,
     cacheTtlMs: e.CACHE_TTL_MS,
     maxConcurrentRenders: e.MAX_CONCURRENT_RENDERS,
+    defaultSettleMs: e.REBOX_DEFAULT_SETTLE_MS,
     allowHttp: Boolean(e.ALLOW_HTTP),
   };
 }

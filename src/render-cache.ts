@@ -17,6 +17,8 @@ export interface NavParams {
   timeoutMs: number;
   viewportW: number;
   viewportH: number;
+  /** Milliseconds to wait in the page after navigation (hydration). */
+  settleMs: number;
   locale?: string;
   userAgent?: string;
 }
@@ -25,6 +27,8 @@ export interface RenderSnapshot {
   finalUrl: string;
   title: string;
   html: string;
+  /** Plain text from the live DOM (helps when article extractors miss SPAs). */
+  visibleText: string;
   navigationMs: number;
   createdAt: number;
   screenshots: Map<string, Buffer>;
@@ -39,6 +43,7 @@ function stableSerializeNav(p: NavParams): string {
     timeoutMs: p.timeoutMs,
     viewportW: p.viewportW,
     viewportH: p.viewportH,
+    settleMs: p.settleMs,
     locale: p.locale ?? '',
     userAgent: p.userAgent ?? '',
   });
