@@ -60,6 +60,8 @@ export function screenshotCacheKey(parts: ScreenshotSpec): string {
 export class RenderSnapshotCache {
   private readonly map = new Map<string, RenderSnapshot>();
   private readonly inflight = new Map<string, Promise<RenderSnapshot>>();
+  /** Coalesce concurrent screenshot fills for the same nav + shot variant (cache had HTML only). */
+  private readonly inflightShot = new Map<string, Promise<{ buffer: Buffer; mimeType: string }>>();
 
   constructor(private readonly cfg: Config) {}
 
@@ -93,9 +95,27 @@ export class RenderSnapshotCache {
     return p;
   }
 
+  /**
+   * Run `factory` once per composite key; parallel callers share the same promise
+   * (e.g. many /image requests after one /text for the same URL).
+   */
+  coalesceShot(
+    compositeKey: string,
+    factory: () => Promise<{ buffer: Buffer; mimeType: string }>,
+  ): Promise<{ buffer: Buffer; mimeType: string }> {
+    const cur = this.inflightShot.get(compositeKey);
+    if (cur) return cur;
+    const p = factory().finally(() => {
+      this.inflightShot.delete(compositeKey);
+    });
+    this.inflightShot.set(compositeKey, p);
+    return p;
+  }
+
   /** @internal testing */
   _clear(): void {
     this.map.clear();
     this.inflight.clear();
+    this.inflightShot.clear();
   }
 }

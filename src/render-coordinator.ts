@@ -30,18 +30,26 @@ export async function resolveRender(
           image: { buffer: buf, mimeType: getScreenshotMime(existing, shotSpec) },
         };
       }
-      const extra = await engine.limiter.run(() => engine.capture(nav, shotSpec));
-      const b = extra.screenshots.get(sk);
-      const mime = extra.screenshotMimes.get(sk) ?? 'image/png';
-      if (b) {
-        existing.screenshots.set(sk, b);
-        existing.screenshotMimes.set(sk, mime);
-        return {
-          snapshot: existing,
-          image: { buffer: b, mimeType: mime },
-        };
-      }
-      throw new ReboxHttpError('INTERNAL', 'Screenshot missing after capture', 500);
+      const shotKey = `${nk}::${sk}`;
+      const { buffer: b, mimeType: mime } = await cache.coalesceShot(shotKey, async () => {
+        if (getScreenshotBuffer(existing, shotSpec)) {
+          const hit = getScreenshotBuffer(existing, shotSpec)!;
+          return { buffer: hit, mimeType: getScreenshotMime(existing, shotSpec) };
+        }
+        const extra = await engine.limiter.run(() => engine.capture(nav, shotSpec));
+        const nb = extra.screenshots.get(sk);
+        const nm = extra.screenshotMimes.get(sk) ?? 'image/png';
+        if (!nb) {
+          throw new ReboxHttpError('INTERNAL', 'Screenshot missing after capture', 500);
+        }
+        existing.screenshots.set(sk, nb);
+        existing.screenshotMimes.set(sk, nm);
+        return { buffer: nb, mimeType: nm };
+      });
+      return {
+        snapshot: existing,
+        image: { buffer: b, mimeType: mime },
+      };
     }
     return { snapshot: existing };
   }

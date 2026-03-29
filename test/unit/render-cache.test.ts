@@ -53,6 +53,23 @@ describe('RenderSnapshotCache', () => {
     expect(calls).toBe(1);
   });
 
+  it('coalesceShot runs factory once for concurrent callers', async () => {
+    const base = loadConfig({});
+    const cache = new RenderSnapshotCache({ ...base, cacheTtlMs: 60_000 });
+    let runs = 0;
+    const p1 = cache.coalesceShot('nav::shot', async () => {
+      runs++;
+      await new Promise((r) => setTimeout(r, 25));
+      return { buffer: Buffer.from('x'), mimeType: 'image/png' };
+    });
+    const p2 = cache.coalesceShot('nav::shot', async () => {
+      runs++;
+      return { buffer: Buffer.from('y'), mimeType: 'image/png' };
+    });
+    await Promise.all([p1, p2]);
+    expect(runs).toBe(1);
+  });
+
   it('expires entries after TTL', async () => {
     vi.useFakeTimers();
     const base = loadConfig({});
