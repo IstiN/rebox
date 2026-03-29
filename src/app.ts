@@ -1,4 +1,7 @@
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { dirname } from 'node:path';
 import { z } from 'zod';
 
 import type { Config } from './config.js';
@@ -14,6 +17,7 @@ import { RenderEngine } from './render-engine.js';
 import { DecodeError, decodeUrlPathSegment } from './encode.js';
 import { assertSafeUrl, SsrfError } from './ssrf.js';
 import { extractYoutubeVideoId } from './youtube.js';
+import { resolveOpenApiSpecPath } from './openapi-path.js';
 import { loadYoutubeTranscript } from './youtube-transcript-service.js';
 
 const navOptionsSchema = z.object({
@@ -109,10 +113,26 @@ export async function buildApp(
     genReqId: () => newRequestId(),
   });
 
+  const openApiPath = resolveOpenApiSpecPath();
+  await app.register(swagger, {
+    mode: 'static',
+    specification: {
+      path: openApiPath,
+      baseDir: dirname(openApiPath),
+    },
+  });
+  await app.register(swaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: {
+      docExpansion: 'list',
+      deepLinking: true,
+    },
+  });
+
   if (cfg.apiKeys.length > 0) {
     app.addHook('onRequest', async (req, reply) => {
       const p = req.url.split('?')[0] ?? req.url;
-      if (p === '/health' || p === '/ready') return;
+      if (p === '/health' || p === '/ready' || p.startsWith('/docs')) return;
       const key = req.headers['x-api-key'];
       if (typeof key !== 'string' || !cfg.apiKeys.includes(key)) {
         const requestId = req.id;
@@ -165,6 +185,7 @@ export async function buildApp(
       routes: {
         health: 'GET /health',
         ready: 'GET /ready',
+        docs: 'GET /docs',
         text: `GET /rebox/${ex}/text`,
         image: `GET /rebox/${ex}/image`,
         audio: `GET /rebox/${yt}/audio`,

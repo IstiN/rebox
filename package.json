@@ -18,6 +18,8 @@
     "verify:all": "npm run build && REBOX_INTEGRATION=1 vitest run test/integration"
   },
   "dependencies": {
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^5.2.5",
     "defuddle": "^0.14.0",
     "fastify": "^5.2.1",
     "playwright": "^1.50.1",

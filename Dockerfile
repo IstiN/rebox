@@ -8,6 +8,7 @@ FROM node:20-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json* tsconfig.json tsconfig.build.json ./
+COPY openapi.yaml ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
@@ -21,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 COPY --from=build /app/package.json ./
+COPY --from=build /app/openapi.yaml ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 RUN mkdir -p /app/ms-playwright && chown -R node:node /app
