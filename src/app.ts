@@ -5,6 +5,7 @@ import type { Config } from './config.js';
 import { runDefuddle } from './defuddle-service.js';
 import { errorBody, newRequestId, ReboxHttpError, type ErrorCode } from './errors.js';
 import { ifNoneMatchMatches, weakEtag } from './etag.js';
+import { contentDispositionInlineFilename, resolveScreenshotBasename } from './download-name.js';
 import { asciiHeaderValue } from './headers-util.js';
 import { resolveRender } from './render-coordinator.js';
 import type { NavParams, RenderSnapshotCache, ScreenshotSpec } from './render-cache.js';
@@ -39,6 +40,8 @@ const imageQuerySchema = navQueryBase.extend({
   format: z.enum(['png', 'webp']).optional(),
   maxHeightPx: z.coerce.number().int().positive().optional(),
   quality: z.coerce.number().int().min(1).max(100).optional(),
+  save_as: z.string().max(200).optional(),
+  filename_source: z.enum(['host', 'title']).optional(),
 });
 
 const audioQuerySchema = navQueryBase.pick({ url: true }).extend({
@@ -247,6 +250,13 @@ export async function buildApp(
       throw new ReboxHttpError('INTERNAL', 'Image payload missing', 500);
     }
 
+    const ext: 'png' | 'webp' = image.mimeType.includes('webp') ? 'webp' : 'png';
+    const stem = resolveScreenshotBasename(snapshot.finalUrl, snapshot.title, {
+      saveAs: q.save_as,
+      filenameSource: q.filename_source,
+    });
+    const contentDisposition = contentDispositionInlineFilename(stem, ext);
+
     const etag = weakEtag(image.buffer);
     if (ifNoneMatchMatches(req.headers['if-none-match'], etag)) {
       reply
@@ -254,7 +264,8 @@ export async function buildApp(
         .header('etag', etag)
         .header('cache-control', 'private, max-age=60')
         .header('x-rebox-final-url', snapshot.finalUrl)
-        .header('x-rebox-title', asciiHeaderValue(snapshot.title));
+        .header('x-rebox-title', asciiHeaderValue(snapshot.title))
+        .header('content-disposition', contentDisposition);
       return reply.send();
     }
 
@@ -264,7 +275,7 @@ export async function buildApp(
       .header('x-rebox-final-url', snapshot.finalUrl)
       .header('x-rebox-title', asciiHeaderValue(snapshot.title))
       .header('x-rebox-timing-navigation-ms', String(snapshot.navigationMs))
-      .header('content-disposition', 'inline; filename="rebox.png"')
+      .header('content-disposition', contentDisposition)
       .type(image.mimeType)
       .send(image.buffer);
   });

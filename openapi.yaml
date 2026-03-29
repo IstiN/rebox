@@ -148,6 +148,17 @@ paths:
         - name: quality
           in: query
           schema: { type: integer, minimum: 1, maximum: 100 }
+        - name: save_as
+          in: query
+          description: Optional filename stem for Save dialog (extension added automatically).
+          schema: { type: string, maxLength: 200 }
+        - name: filename_source
+          in: query
+          description: How to pick the default stem if `save_as` is omitted — `host` (e.g. learn.ai-native.pro) or `title` (slug from page title).
+          schema:
+            type: string
+            enum: [host, title]
+            default: host
       responses:
         '200':
           description: Raw image
