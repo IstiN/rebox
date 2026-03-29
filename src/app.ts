@@ -11,12 +11,12 @@ import { resolveRender } from './render-coordinator.js';
 import type { NavParams, RenderSnapshotCache, ScreenshotSpec } from './render-cache.js';
 import { RenderSnapshotCache as CacheCtor } from './render-cache.js';
 import { RenderEngine } from './render-engine.js';
+import { DecodeError, decodeUrlPathSegment } from './encode.js';
 import { assertSafeUrl, SsrfError } from './ssrf.js';
 import { extractYoutubeVideoId } from './youtube.js';
 import { loadYoutubeTranscript } from './youtube-transcript-service.js';
 
-const navQueryBase = z.object({
-  url: z.string().min(1, 'url query parameter is required'),
+const navOptionsSchema = z.object({
   wait_until: z.enum(['load', 'domcontentloaded', 'networkidle']).optional(),
   timeout_ms: z.coerce.number().min(1000).max(120_000).optional(),
   viewport_w: z.coerce.number().int().positive().max(4096).optional(),
@@ -26,7 +26,7 @@ const navQueryBase = z.object({
   user_agent: z.string().max(1024).optional(),
 });
 
-const textQuerySchema = navQueryBase.extend({
+const textQuerySchema = navOptionsSchema.extend({
   markdown: z.enum(['true', 'false']).optional(),
   separateMarkdown: z.enum(['true', 'false']).optional(),
   includeRawHtml: z.enum(['true', 'false']).optional(),
@@ -35,7 +35,7 @@ const textQuerySchema = navQueryBase.extend({
   debug: z.enum(['true', 'false']).optional(),
 });
 
-const imageQuerySchema = navQueryBase.extend({
+const imageQuerySchema = navOptionsSchema.extend({
   fullPage: z.enum(['true', 'false']).optional(),
   format: z.enum(['png', 'webp']).optional(),
   maxHeightPx: z.coerce.number().int().positive().optional(),
@@ -44,7 +44,7 @@ const imageQuerySchema = navQueryBase.extend({
   filename_source: z.enum(['host', 'title']).optional(),
 });
 
-const audioQuerySchema = navQueryBase.pick({ url: true }).extend({
+const audioQuerySchema = z.object({
   lang: z.string().max(32).optional(),
 });
 
@@ -58,7 +58,7 @@ function flattenQuery(q: Record<string, unknown>): Record<string, unknown> {
 
 function parseNavParams(
   href: string,
-  o: z.infer<typeof navQueryBase>,
+  o: z.infer<typeof navOptionsSchema>,
   cfg: Config,
 ): NavParams {
   return {
@@ -148,22 +148,30 @@ export async function buildApp(
       reply.status(400).send(errorBody(err.code as ErrorCode, err.message, requestId));
       return;
     }
+    if (err instanceof DecodeError) {
+      reply.status(400).send(errorBody('INVALID_ENCODING', err.message, requestId));
+      return;
+    }
     req.log.error(err);
     reply.status(500).send(errorBody('INTERNAL', 'Unexpected error', requestId));
   });
 
-  app.get('/', async () => ({
-    service: 'rebox',
-    version: '0.3.0',
-    routes: {
-      health: 'GET /health',
-      ready: 'GET /ready',
-      text: 'GET /rebox/text?url=' + encodeURIComponent('https://example.com/'),
-      image: 'GET /rebox/image?url=' + encodeURIComponent('https://example.com/'),
-      audio: 'GET /rebox/audio?url=' + encodeURIComponent('https://www.youtube.com/watch?v=VIDEO_ID'),
-    },
-    note: 'Pass target page as query param url (encodeURIComponent). If /rebox/text returns 404, rebuild and restart: npm run build && node dist/server.js',
-  }));
+  app.get('/', async () => {
+    const ex = encodeURIComponent('https://example.com/');
+    const yt = encodeURIComponent('https://www.youtube.com/watch?v=VIDEO_ID');
+    return {
+      service: 'rebox',
+      version: '0.4.0',
+      routes: {
+        health: 'GET /health',
+        ready: 'GET /ready',
+        text: `GET /rebox/${ex}/text`,
+        image: `GET /rebox/${ex}/image`,
+        audio: `GET /rebox/${yt}/audio`,
+      },
+      note: 'Target URL is the first path segment after /rebox/, encoded with encodeURIComponent (slashes become %2F). Options stay in ?query. Rebuild if routes 404: npm run build && node dist/server.js',
+    };
+  });
 
   app.get('/health', async () => ({ status: 'ok' }));
 
@@ -176,12 +184,12 @@ export async function buildApp(
     }
   });
 
-  app.get('/rebox/text', async (req, reply) => {
+  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/text', async (req, reply) => {
     const requestId = req.id;
-    const q = textQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
-    const href = q.url.trim();
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
+    const q = textQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
     const nav = parseNavParams(href, q, cfg);
 
     const { snapshot } = await resolveRender(cache, engine, nav, null);
@@ -232,11 +240,11 @@ export async function buildApp(
     return reply.send(bodyObj);
   });
 
-  app.get('/rebox/image', async (req, reply) => {
-    const q = imageQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
-    const href = q.url.trim();
+  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/image', async (req, reply) => {
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
+    const q = imageQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
     const nav = parseNavParams(href, q, cfg);
     const spec: ScreenshotSpec = {
       format: q.format === 'webp' ? 'webp' : 'png',
@@ -280,12 +288,12 @@ export async function buildApp(
       .send(image.buffer);
   });
 
-  app.get('/rebox/audio', async (req, reply) => {
+  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/audio', async (req, reply) => {
     const requestId = req.id;
-    const q = audioQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
-    const href = q.url.trim();
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
+    const q = audioQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
 
     const videoId = extractYoutubeVideoId(href);
     if (!videoId) {

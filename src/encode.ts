@@ -1,5 +1,23 @@
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 
+/** One path segment: full URL via encodeURIComponent (slashes → %2F). */
+export function encodeUrlPathSegment(url: string): string {
+  return encodeURIComponent(url);
+}
+
+export function decodeUrlPathSegment(segment: string): string {
+  let out: string;
+  try {
+    out = decodeURIComponent(segment.replace(/\+/g, ' ')).trim();
+  } catch {
+    throw new DecodeError('INVALID_ENCODING', 'invalid percent-encoding in path');
+  }
+  if (!out) {
+    throw new DecodeError('INVALID_ENCODING', 'empty URL path segment');
+  }
+  return out;
+}
+
 export function encodeUrlToToken(url: string): string {
   return Buffer.from(url, 'utf8').toString('base64url').replace(/=+$/, '');
 }

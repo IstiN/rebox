@@ -2,22 +2,20 @@ openapi: 3.0.3
 info:
   title: rebox
   description: |
-    **rebox** loads a **public URL** passed as a **query parameter** (`url`, use standard percent-encoding / `encodeURIComponent`),
-    then returns **text** (render + [Defuddle](https://github.com/kepano/defuddle) plus **`visibleText`** from the live DOM for SPAs),
-    a **raw screenshot** (`GET /rebox/image`), or **YouTube captions** (`GET /rebox/audio`).
+    **rebox** loads a **public URL** as **one path segment** after `/rebox/`: the segment is the full URL encoded with **`encodeURIComponent`**
+    (so `https://` → `https%3A%2F%2F`, path slashes stay inside the segment as `%2F`).
 
-    **Example (browser-safe):**  
-    `GET /rebox/text?url=https%3A%2F%2Flearn.ai-native.pro%2F`
+    Then **`/text`**, **`/image`**, or **`/audio`** selects the response. Render options stay in the **query string**.
 
-    Defaults: `wait_until=domcontentloaded`, `timeout_ms=60000`, **`settle_ms`** defaults from env `REBOX_DEFAULT_SETTLE_MS` (default **2000** ms)
-    so client-rendered pages can hydrate before HTML/screenshot.
+    **Example:**  
+    `GET /rebox/https%3A%2F%2Flearn.ai-native.pro%2F/text?timeout_ms=90000`
 
-    Image body is raw PNG/WebP bytes; metadata in headers (`X-Rebox-Final-Url`, etc.).
+    Defaults: `wait_until=domcontentloaded`, `timeout_ms=60000`, **`settle_ms`** from env `REBOX_DEFAULT_SETTLE_MS` (default **2000** ms).
 
-    Internal **snapshot cache** still dedupes `/text` and `/image` for the same URL + nav options.
+    Image body is raw PNG/WebP bytes; optional query `save_as`, `filename_source`, `fullPage`, etc.
 
     Production: `X-API-Key` when `REBOX_API_KEYS` is set. SSRF checks on every target URL.
-  version: 0.3.0
+  version: 0.4.0
 
 servers:
   - url: https://rebox.example.com
@@ -64,13 +62,13 @@ paths:
         '503':
           description: Not ready
 
-  /rebox/text:
+  /rebox/{encodedUrl}/text:
     get:
       tags: [rebox]
       summary: Render URL, extract article + visible plain text
       operationId: reboxText
       parameters:
-        - $ref: '#/components/parameters/TargetUrl'
+        - $ref: '#/components/parameters/EncodedUrl'
         - $ref: '#/components/parameters/WaitUntil'
         - $ref: '#/components/parameters/TimeoutMs'
         - $ref: '#/components/parameters/SettleMs'
@@ -118,13 +116,13 @@ paths:
         '502':
           $ref: '#/components/responses/BadGateway'
 
-  /rebox/image:
+  /rebox/{encodedUrl}/image:
     get:
       tags: [rebox]
       summary: Screenshot only (response body = image bytes)
       operationId: reboxImage
       parameters:
-        - $ref: '#/components/parameters/TargetUrl'
+        - $ref: '#/components/parameters/EncodedUrl'
         - $ref: '#/components/parameters/WaitUntil'
         - $ref: '#/components/parameters/TimeoutMs'
         - $ref: '#/components/parameters/SettleMs'
@@ -186,13 +184,13 @@ paths:
         '502':
           $ref: '#/components/responses/BadGateway'
 
-  /rebox/audio:
+  /rebox/{encodedUrl}/audio:
     get:
       tags: [rebox]
       summary: YouTube transcript (non-YouTube URL → 404)
       operationId: reboxAudio
       parameters:
-        - $ref: '#/components/parameters/TargetUrl'
+        - $ref: '#/components/parameters/EncodedUrl'
         - name: lang
           in: query
           schema: { type: string }
@@ -224,14 +222,14 @@ components:
       name: X-API-Key
 
   parameters:
-    TargetUrl:
-      name: url
-      in: query
+    EncodedUrl:
+      name: encodedUrl
+      in: path
       required: true
-      description: Absolute http(s) URL, percent-encoded (e.g. `encodeURIComponent` in JavaScript).
+      description: |
+        Full target URL as **one** path segment: `encodeURIComponent(url)` in JS (slashes must be `%2F`, not literal `/`).
       schema:
         type: string
-        format: uri
     WaitUntil:
       name: wait_until
       in: query

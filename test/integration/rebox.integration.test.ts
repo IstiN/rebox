@@ -9,6 +9,10 @@ function q(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
 }
 
+function pathRebox(targetUrl: string, kind: 'text' | 'image' | 'audio'): string {
+  return `/rebox/${encodeURIComponent(targetUrl)}/${kind}`;
+}
+
 describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
   let baseUrl: string;
   let stop: () => Promise<void>;
@@ -34,12 +38,13 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
     await stop?.();
   });
 
-  it('GET / returns API map (detect stale deploy)', async () => {
+  it('GET / returns API map (path segment URL)', async () => {
     const res = await fetch(`${baseUrl}/`);
     expect(res.status).toBe(200);
     const j = (await res.json()) as { service: string; routes: { text: string } };
     expect(j.service).toBe('rebox');
-    expect(j.routes.text).toContain('/rebox/text?url=');
+    expect(j.routes.text).toMatch(/\/rebox\/.+\/text$/);
+    expect(j.routes.text).not.toContain('?url=');
   });
 
   it('GET /health', async () => {
@@ -48,9 +53,9 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
     await expect(res.json()).resolves.toEqual({ status: 'ok' });
   });
 
-  it('GET /rebox/text matches exact browser query (no trailing slash on host)', async () => {
-    const qs = 'url=https%3A%2F%2Flearn.ai-native.pro&timeout_ms=90000';
-    const res = await fetch(`${baseUrl}/rebox/text?${qs}`);
+  it('GET /rebox/:encoded/text — learn.ai-native.pro without trailing slash', async () => {
+    const path = pathRebox('https://learn.ai-native.pro', 'text');
+    const res = await fetch(`${baseUrl}${path}?${q({ timeout_ms: '90000' })}`);
     expect(res.status).toBe(200);
     const j = (await res.json()) as { visibleText: string };
     expect(j.visibleText.length).toBeGreaterThan(50);
@@ -63,9 +68,9 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
     expect(j.status).toBe('ready');
   });
 
-  it('GET /rebox/text learn.ai-native.pro returns visibleText + article', async () => {
+  it('GET /rebox/.../text learn.ai-native.pro/ returns visibleText + article', async () => {
     const url = 'https://learn.ai-native.pro/';
-    const res = await fetch(`${baseUrl}/rebox/text?${q({ url, timeout_ms: '90000' })}`);
+    const res = await fetch(`${baseUrl}${pathRebox(url, 'text')}?${q({ timeout_ms: '90000' })}`);
     expect(res.status).toBe(200);
     const j = (await res.json()) as {
       finalUrl: string;
@@ -78,9 +83,9 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
     expect(extracted + j.visibleText.length).toBeGreaterThan(80);
   }, 120_000);
 
-  it('GET /rebox/image learn.ai-native.pro returns PNG', async () => {
+  it('GET /rebox/.../image learn.ai-native.pro returns PNG', async () => {
     const url = 'https://learn.ai-native.pro/';
-    const res = await fetch(`${baseUrl}/rebox/image?${q({ url, timeout_ms: '90000', format: 'png' })}`);
+    const res = await fetch(`${baseUrl}${pathRebox(url, 'image')}?${q({ timeout_ms: '90000', format: 'png' })}`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toMatch(/image\/png/);
     const buf = Buffer.from(await res.arrayBuffer());
@@ -91,12 +96,13 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
 
   it('second identical /image is fast (cache)', async () => {
     const url = 'https://learn.ai-native.pro/';
-    const qs = q({ url, timeout_ms: '90000', format: 'png' });
-    const r1 = await fetch(`${baseUrl}/rebox/image?${qs}`);
+    const path = pathRebox(url, 'image');
+    const qs = q({ timeout_ms: '90000', format: 'png' });
+    const r1 = await fetch(`${baseUrl}${path}?${qs}`);
     expect(r1.status).toBe(200);
     await r1.arrayBuffer();
     const t0 = Date.now();
-    const r2 = await fetch(`${baseUrl}/rebox/image?${qs}`);
+    const r2 = await fetch(`${baseUrl}${path}?${qs}`);
     expect(r2.status).toBe(200);
     await r2.arrayBuffer();
     expect(Date.now() - t0).toBeLessThan(8000);

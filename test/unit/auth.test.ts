@@ -12,7 +12,7 @@ describe('API key auth', () => {
     const { app } = await buildApp(cfg, { logger: false });
     const res = await app.inject({
       method: 'GET',
-      url: `/rebox/text?${new URLSearchParams({ url: 'https://example.com/' }).toString()}`,
+      url: `/rebox/${encodeURIComponent('https://example.com/')}/text`,
     });
     await app.close();
     expect(res.statusCode).toBe(401);
