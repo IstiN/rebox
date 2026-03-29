@@ -12,7 +12,8 @@
     "dev": "tsx watch src/server.ts",
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
-    "test:integration": "REBOX_INTEGRATION=1 vitest run test/integration"
+    "test:integration": "REBOX_INTEGRATION=1 vitest run test/integration",
+    "verify": "npm run build && REBOX_INTEGRATION=1 vitest run test/integration/rebox.integration.test.ts"
   },
   "dependencies": {
     "defuddle": "^0.14.0",

@@ -149,6 +149,19 @@ export async function buildApp(
     reply.status(500).send(errorBody('INTERNAL', 'Unexpected error', requestId));
   });
 
+  app.get('/', async () => ({
+    service: 'rebox',
+    version: '0.3.0',
+    routes: {
+      health: 'GET /health',
+      ready: 'GET /ready',
+      text: 'GET /rebox/text?url=' + encodeURIComponent('https://example.com/'),
+      image: 'GET /rebox/image?url=' + encodeURIComponent('https://example.com/'),
+      audio: 'GET /rebox/audio?url=' + encodeURIComponent('https://www.youtube.com/watch?v=VIDEO_ID'),
+    },
+    note: 'Pass target page as query param url (encodeURIComponent). If /rebox/text returns 404, rebuild and restart: npm run build && node dist/server.js',
+  }));
+
   app.get('/health', async () => ({ status: 'ok' }));
 
   app.get('/ready', async (_, reply) => {

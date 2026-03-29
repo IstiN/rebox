@@ -34,11 +34,27 @@ describe.skipIf(!enabled)('rebox integration (REBOX_INTEGRATION=1)', () => {
     await stop?.();
   });
 
+  it('GET / returns API map (detect stale deploy)', async () => {
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { service: string; routes: { text: string } };
+    expect(j.service).toBe('rebox');
+    expect(j.routes.text).toContain('/rebox/text?url=');
+  });
+
   it('GET /health', async () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ status: 'ok' });
   });
+
+  it('GET /rebox/text matches exact browser query (no trailing slash on host)', async () => {
+    const qs = 'url=https%3A%2F%2Flearn.ai-native.pro&timeout_ms=90000';
+    const res = await fetch(`${baseUrl}/rebox/text?${qs}`);
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { visibleText: string };
+    expect(j.visibleText.length).toBeGreaterThan(50);
+  }, 120_000);
 
   it('GET /ready', async () => {
     const res = await fetch(`${baseUrl}/ready`);
