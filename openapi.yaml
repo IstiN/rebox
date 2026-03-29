@@ -1,0 +1,571 @@
+openapi: 3.0.3
+info:
+  title: rebox — web render & transcript service
+  description: |
+    Headless Chromium render service with separate endpoints for **text extraction** (render + [Defuddle](https://github.com/kepano/defuddle))
+    and **screenshots**, plus optional **YouTube** and **audio** transcript endpoints.
+
+    **Implementation notes (not part of this contract):**
+    - Text path: Playwright → rendered HTML → `defuddle/node` (e.g. with linkedom/JSDOM) → structured article fields.
+    - Screenshot path: Playwright only; no Defuddle; returns image bytes (multipart) or base64 per `Accept` / query.
+    - YouTube: e.g. [`youtube-transcript`](https://www.npmjs.com/package/youtube-transcript) or [`youtube-transcript-api`](https://www.npmjs.com/package/youtube-transcript-api) — respect YouTube ToS and rate limits.
+    - Audio URL / file: e.g. cloud **Speech-to-Text** (Google, AWS), **OpenAI Whisper API**, or self-hosted **whisper.cpp** / **faster-whisper** — choose in implementation; not all fit one container.
+
+    Production: protect with API key, mTLS, or platform IAM (e.g. Cloud Run invoker). SSRF rules apply to all URL inputs.
+  version: 0.1.0
+
+servers:
+  - url: https://rebox.example.com
+    description: Production
+
+tags:
+  - name: health
+  - name: render
+  - name: youtube
+  - name: media
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: Service process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness (browser warm, dependencies OK)
+      security: []
+      responses:
+        '200':
+          description: Ready to accept render jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Not ready (e.g. browser still starting)
+
+  /v1/render/text:
+    post:
+      tags: [render]
+      summary: Render page and extract main text (Defuddle)
+      description: |
+        Loads `url` in headless Chromium, waits per `options`, serializes DOM HTML, runs **Defuddle** extraction.
+        Returns article-like fields (HTML and/or Markdown), not the full raw document (unless `includeRawHtml` is true and within limits).
+      operationId: renderText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderTextRequest'
+      responses:
+        '200':
+          description: Extracted content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderTextResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /v1/render/screenshot:
+    post:
+      tags: [render]
+      summary: Render page and return screenshot only
+      description: |
+        Same navigation and SSRF policy as text endpoint; returns **only** a raster image (no Defuddle, no article body in JSON).
+        Prefer `multipart/form-data` response or `Accept: image/png` for large images; JSON + base64 optional for small payloads.
+      operationId: renderScreenshot
+      parameters:
+        - name: Accept
+          in: header
+          schema:
+            type: string
+            enum:
+              - application/json
+              - multipart/form-data
+              - image/png
+              - image/webp
+          description: Preferred response shape. Default `application/json` with base64 if small; server may ignore and use multipart for large images.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderScreenshotRequest'
+      responses:
+        '200':
+          description: Screenshot and minimal metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderScreenshotResponseJson'
+            multipart/form-data:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: string
+                    description: JSON part — finalUrl, title, timingsMs, contentType
+                  image:
+                    type: string
+                    format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /v1/youtube/transcript:
+    post:
+      tags: [youtube]
+      summary: Fetch YouTube captions/transcript by video URL or ID
+      description: |
+        Does **not** use the browser for MVP if a transcript library suffices. Separate rate limits and ToS compliance required.
+      operationId: youtubeTranscript
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YoutubeTranscriptRequest'
+      responses:
+        '200':
+          description: Transcript segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YoutubeTranscriptResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No captions available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /v1/media/transcript:
+    post:
+      tags: [media]
+      summary: Transcribe audio from URL (or upload — optional extension)
+      description: |
+        Fetches **public** audio URL (HTTPS, SSRF-safe), runs speech-to-text. Exact engine (Whisper API, GCP STT, etc.) is implementation-defined.
+        Optional future: `multipart/form-data` with file part for direct upload.
+      operationId: mediaTranscript
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaTranscriptRequest'
+      responses:
+        '200':
+          description: Transcript result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaTranscriptResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  responses:
+    BadRequest:
+      description: Invalid input or blocked URL (SSRF)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Timeout:
+      description: Navigation or overall deadline exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    PayloadTooLarge:
+      description: HTML/audio/screenshot exceeds configured limits
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    TooManyRequests:
+      description: Concurrency or rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    BadGateway:
+      description: Upstream fetch or browser failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+
+  schemas:
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_URL
+            - SSRF_BLOCKED
+            - DNS_REBINDING
+            - TIMEOUT
+            - NAVIGATION_FAILED
+            - BODY_TOO_LARGE
+            - SCREENSHOT_TOO_LARGE
+            - BROWSER_CRASH
+            - EXTRACTION_FAILED
+            - TRANSCRIPT_UNAVAILABLE
+            - TRANSCRIPTION_FAILED
+            - RATE_LIMITED
+            - UNAUTHORIZED
+            - INTERNAL
+        message:
+          type: string
+        requestId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ReadyResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ready
+        browser:
+          type: string
+          example: chromium
+
+    NavigationOptions:
+      type: object
+      properties:
+        waitUntil:
+          type: string
+          enum: [load, domcontentloaded, networkidle]
+          default: networkidle
+        timeoutMs:
+          type: integer
+          minimum: 1000
+          maximum: 120000
+          default: 30000
+        userAgent:
+          type: string
+        locale:
+          type: string
+          description: BCP 47 tag
+        viewport:
+          type: object
+          properties:
+            width:
+              type: integer
+              default: 1280
+            height:
+              type: integer
+              default: 720
+
+    RenderTextRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HTTPS (or HTTP if policy allows)
+        options:
+          type: object
+          properties:
+            navigation:
+              $ref: '#/components/schemas/NavigationOptions'
+            defuddle:
+              type: object
+              description: Passed to Defuddle (markdown, language, contentSelector, etc.)
+              properties:
+                markdown:
+                  type: boolean
+                  default: true
+                separateMarkdown:
+                  type: boolean
+                  default: false
+                language:
+                  type: string
+                contentSelector:
+                  type: string
+                debug:
+                  type: boolean
+                  default: false
+            includeRawHtml:
+              type: boolean
+              default: false
+              description: If true, include capped raw rendered HTML in addition to Defuddle output
+            maxRawHtmlChars:
+              type: integer
+              description: Hard cap when includeRawHtml is true
+
+    RenderTextResponse:
+      type: object
+      required: [finalUrl, status, timingsMs]
+      properties:
+        status:
+          type: string
+          enum: [success]
+        finalUrl:
+          type: string
+          format: uri
+        title:
+          type: string
+        article:
+          type: object
+          description: Defuddle-aligned fields
+          properties:
+            contentHtml:
+              type: string
+              description: Main extracted HTML
+            contentMarkdown:
+              type: string
+            description:
+              type: string
+            author:
+              type: string
+            site:
+              type: string
+            domain:
+              type: string
+            language:
+              type: string
+            published:
+              type: string
+            wordCount:
+              type: integer
+            extractorType:
+              type: string
+            schemaOrgData:
+              type: object
+              additionalProperties: true
+        rawHtml:
+          type: string
+          description: Present only if requested and within limits
+        timingsMs:
+          type: object
+          properties:
+            navigation:
+              type: number
+            defuddle:
+              type: number
+        requestId:
+          type: string
+
+    RenderScreenshotRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        options:
+          type: object
+          properties:
+            navigation:
+              $ref: '#/components/schemas/NavigationOptions'
+            screenshot:
+              type: object
+              properties:
+                fullPage:
+                  type: boolean
+                  default: false
+                type:
+                  type: string
+                  enum: [png, webp]
+                  default: png
+                maxHeightPx:
+                  type: integer
+                  description: Cap full-page height to control memory
+                quality:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  description: WebP only
+
+    RenderScreenshotResponseJson:
+      type: object
+      required: [finalUrl, screenshotMimeType, timingsMs]
+      properties:
+        status:
+          type: string
+          enum: [success]
+        finalUrl:
+          type: string
+          format: uri
+        title:
+          type: string
+        screenshotBase64:
+          type: string
+          description: Omitted when response is multipart or raw image
+        screenshotMimeType:
+          type: string
+          example: image/png
+        width:
+          type: integer
+        height:
+          type: integer
+        timingsMs:
+          type: object
+          properties:
+            navigation:
+              type: number
+            screenshot:
+              type: number
+        requestId:
+          type: string
+
+    YoutubeTranscriptRequest:
+      type: object
+      required: [video]
+      properties:
+        video:
+          type: string
+          description: YouTube watch URL or video ID
+        lang:
+          type: string
+          description: Preferred caption language (BCP 47)
+
+    YoutubeTranscriptResponse:
+      type: object
+      required: [videoId, segments]
+      properties:
+        videoId:
+          type: string
+        title:
+          type: string
+        language:
+          type: string
+        segments:
+          type: array
+          items:
+            type: object
+            required: [text]
+            properties:
+              startSec:
+                type: number
+              durationSec:
+                type: number
+              text:
+                type: string
+        timingsMs:
+          type: object
+          properties:
+            fetch:
+              type: number
+        requestId:
+          type: string
+
+    MediaTranscriptRequest:
+      type: object
+      required: [audioUrl]
+      properties:
+        audioUrl:
+          type: string
+          format: uri
+          description: Public HTTPS URL to audio (SSRF-checked)
+        language:
+          type: string
+          description: Hint for STT engine
+        engine:
+          type: string
+          enum: [default]
+          description: Reserved for future engine selection; omit or use default
+
+    MediaTranscriptResponse:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Full transcript
+        language:
+          type: string
+        timingsMs:
+          type: object
+          properties:
+            download:
+              type: number
+            transcribe:
+              type: number
+        requestId:
+          type: string
