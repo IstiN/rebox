@@ -237,7 +237,7 @@ export async function buildApp(
     const nav = parseNavParams(href, q, cfg);
     const spec: ScreenshotSpec = {
       format: q.format === 'webp' ? 'webp' : 'png',
-      fullPage: q.fullPage === 'true',
+      fullPage: q.fullPage !== 'false',
       maxHeightPx: q.maxHeightPx,
       quality: q.quality,
     };

@@ -134,7 +134,8 @@ paths:
         - $ref: '#/components/parameters/UserAgent'
         - name: fullPage
           in: query
-          schema: { type: boolean, default: false }
+          description: Full scrollable page screenshot. Pass `false` for viewport-only.
+          schema: { type: boolean, default: true }
         - name: format
           in: query
           schema:
