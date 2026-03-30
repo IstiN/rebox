@@ -223,7 +223,7 @@ export async function buildApp(
     const yt = encodeURIComponent('https://www.youtube.com/watch?v=VIDEO_ID');
     return {
       service: 'rebox',
-      version: '0.4.0',
+      version: '0.5.0',
       routes: {
         health: 'GET /health',
         ready: 'GET /ready',
