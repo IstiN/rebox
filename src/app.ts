@@ -75,6 +75,29 @@ function mergeReboxQuery(
   return out;
 }
 
+/** Plain URL: GET `?url=`, or POST JSON `{ "url": "https://..." }` (body wins over query for the target). */
+function extractPlainTargetUrl(req: FastifyRequest): string {
+  if (req.method === 'POST' && req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    const u = (req.body as Record<string, unknown>).url;
+    if (typeof u === 'string' && u.trim()) return u.trim();
+  }
+  const q = flattenQuery(req.query as Record<string, unknown>);
+  const qu = q.url;
+  if (typeof qu === 'string' && qu.trim()) return qu.trim();
+  throw new ReboxHttpError(
+    'INVALID_URL',
+    'Provide full URL as query ?url=... or POST JSON { "url": "https://..." }',
+    400,
+  );
+}
+
+/** Options for plain routes: same merge as path-encoded routes, but `url` is never passed to zod. */
+function mergePlainOptions(req: FastifyRequest): Record<string, unknown> {
+  const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+  const { url: _drop, ...rest } = merged;
+  return rest;
+}
+
 function parseNavParams(
   href: string,
   o: z.infer<typeof navOptionsSchema>,
@@ -205,11 +228,14 @@ export async function buildApp(
         health: 'GET /health',
         ready: 'GET /ready',
         docs: 'GET /docs',
+        textPlain: 'GET|POST /rebox/text?url= or body { url }',
+        imagePlain: 'GET|POST /rebox/image?url= or body { url }',
+        audioPlain: 'GET|POST /rebox/audio?url= or body { url }',
         text: `GET|POST /rebox/${ex}/text`,
         image: `GET|POST /rebox/${ex}/image`,
         audio: `GET|POST /rebox/${yt}/audio`,
       },
-      note: 'Target URL is the first path segment after /rebox/, encoded with encodeURIComponent (slashes become %2F). Options: query string and/or JSON body on POST. Optional auth: REBOX_API_KEYS → X-API-Key or Authorization: Bearer.',
+      note: 'Use /rebox/text|image|audio with full URL as ?url= (encode once) or POST JSON { "url": "https://..." } for a literal URL. Legacy: /rebox/<encodeURIComponent(url)>/text. Options: query and/or POST JSON. Optional auth: REBOX_API_KEYS.',
     };
   });
 
@@ -224,15 +250,15 @@ export async function buildApp(
     }
   });
 
-  const textHandler = async (
-    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+  const deliverText = async (
+    href: string,
+    merged: Record<string, unknown>,
+    req: FastifyRequest,
     reply: FastifyReply,
   ) => {
-    const requestId = req.id;
-    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    const requestId = req.id;
     const q = textQuerySchema.parse(merged);
     const nav = parseNavParams(href, q, cfg);
 
@@ -284,20 +310,14 @@ export async function buildApp(
     return reply.send(bodyObj);
   };
 
-  app.route({
-    method: ['GET', 'POST'],
-    url: '/rebox/:encodedUrl/text',
-    handler: textHandler,
-  });
-
-  const imageHandler = async (
-    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+  const deliverImage = async (
+    href: string,
+    merged: Record<string, unknown>,
+    req: FastifyRequest,
     reply: FastifyReply,
   ) => {
-    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
     const q = imageQuerySchema.parse(merged);
     const nav = parseNavParams(href, q, cfg);
     const spec: ScreenshotSpec = {
@@ -342,21 +362,15 @@ export async function buildApp(
       .send(image.buffer);
   };
 
-  app.route({
-    method: ['GET', 'POST'],
-    url: '/rebox/:encodedUrl/image',
-    handler: imageHandler,
-  });
-
-  const audioHandler = async (
-    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+  const deliverAudio = async (
+    href: string,
+    merged: Record<string, unknown>,
+    req: FastifyRequest,
     reply: FastifyReply,
   ) => {
-    const requestId = req.id;
-    const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    const requestId = req.id;
     const q = audioQuerySchema.parse(merged);
 
     const videoId = extractYoutubeVideoId(href);
@@ -386,6 +400,62 @@ export async function buildApp(
 
     reply.header('etag', etag).header('cache-control', 'private, max-age=300');
     return reply.send(bodyObj);
+  };
+
+  const plainTextHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const href = extractPlainTargetUrl(req);
+    return deliverText(href, mergePlainOptions(req), req, reply);
+  };
+  const plainImageHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const href = extractPlainTargetUrl(req);
+    return deliverImage(href, mergePlainOptions(req), req, reply);
+  };
+  const plainAudioHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const href = extractPlainTargetUrl(req);
+    return deliverAudio(href, mergePlainOptions(req), req, reply);
+  };
+
+  app.route({ method: ['GET', 'POST'], url: '/rebox/text', handler: plainTextHandler });
+  app.route({ method: ['GET', 'POST'], url: '/rebox/image', handler: plainImageHandler });
+  app.route({ method: ['GET', 'POST'], url: '/rebox/audio', handler: plainAudioHandler });
+
+  const textHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    return deliverText(href, merged, req, reply);
+  };
+
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/rebox/:encodedUrl/text',
+    handler: textHandler,
+  });
+
+  const imageHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    return deliverImage(href, merged, req, reply);
+  };
+
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/rebox/:encodedUrl/image',
+    handler: imageHandler,
+  });
+
+  const audioHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const href = decodeUrlPathSegment(req.params.encodedUrl);
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    return deliverAudio(href, merged, req, reply);
   };
 
   app.route({

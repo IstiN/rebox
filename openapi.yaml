@@ -2,13 +2,13 @@ openapi: 3.0.3
 info:
   title: rebox
   description: |
-    **rebox** loads a **public URL** as **one path segment** after `/rebox/`: the segment is the full URL encoded with **`encodeURIComponent`**
-    (so `https://` → `https%3A%2F%2F`, path slashes stay inside the segment as `%2F`).
+    **rebox** loads a **public URL** (headless Chromium) and returns **text**, **image**, or **YouTube transcript**.
 
-    Then **`/text`**, **`/image`**, or **`/audio`** selects the response. Render options stay in the **query string**.
+    **Plain URL (recommended):** `GET|POST /rebox/text`, `/rebox/image`, `/rebox/audio` — pass the full URL as **`?url=`** (encode the value once if it contains `?`, `&`, `#`) or as **`{ "url": "https://..." }`** in the POST JSON body (exact string, no path encoding). Options in query and/or JSON body on POST.
 
-    **Example:**  
-    `GET /rebox/https%3A%2F%2Flearn.ai-native.pro%2F/text?timeout_ms=90000`
+    **Legacy path segment:** `/rebox/<encodeURIComponent(url)>/text` (slashes in the URL become `%2F` inside one path segment).
+
+    **Example:** `POST /rebox/text` with body `{"url":"https://learn.ai-native.pro/","timeout_ms":90000}`
 
     Defaults: `wait_until=domcontentloaded`, `timeout_ms=60000`, **`settle_ms`** from env `REBOX_DEFAULT_SETTLE_MS` (default **2000** ms).
 
@@ -64,6 +64,276 @@ paths:
                 $ref: '#/components/schemas/ReadyResponse'
         '503':
           description: Not ready
+
+  /rebox/text:
+    get:
+      tags: [rebox]
+      summary: Text — full URL in query `url` (no path encoding)
+      operationId: reboxTextPlainGet
+      parameters:
+        - $ref: '#/components/parameters/PlainTargetUrl'
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+        - name: markdown
+          in: query
+          schema: { type: boolean, default: true }
+        - name: separateMarkdown
+          in: query
+          schema: { type: boolean, default: false }
+        - name: includeRawHtml
+          in: query
+          schema: { type: boolean, default: false }
+        - name: maxRawHtmlChars
+          in: query
+          schema: { type: integer }
+        - name: content_selector
+          in: query
+          schema: { type: string }
+        - name: debug
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: JSON with `visibleText` and Defuddle `article`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxTextResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: 'POST JSON with required url (full https string) and optional fields; merges with query'
+      operationId: reboxTextPlainPost
+      parameters:
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              additionalProperties: true
+              properties:
+                url:
+                  type: string
+                  description: Full target URL as a single string
+      responses:
+        '200':
+          description: JSON with `visibleText` and Defuddle `article`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxTextResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /rebox/image:
+    get:
+      tags: [rebox]
+      summary: Image — full URL in query `url`
+      operationId: reboxImagePlainGet
+      parameters:
+        - $ref: '#/components/parameters/PlainTargetUrl'
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+        - name: fullPage
+          in: query
+          schema: { type: boolean, default: true }
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [png, webp]
+            default: png
+        - name: maxHeightPx
+          in: query
+          schema: { type: integer }
+        - name: quality
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - name: save_as
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: filename_source
+          in: query
+          schema:
+            type: string
+            enum: [host, title]
+            default: host
+      responses:
+        '200':
+          description: Raw image
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: Image — URL in JSON body
+      operationId: reboxImagePlainPost
+      parameters:
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              additionalProperties: true
+              properties:
+                url: { type: string }
+                fullPage: { type: boolean }
+                format: { type: string, enum: [png, webp] }
+      responses:
+        '200':
+          description: Raw image
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /rebox/audio:
+    get:
+      tags: [rebox]
+      summary: YouTube audio — full URL in query `url`
+      operationId: reboxAudioPlainGet
+      parameters:
+        - $ref: '#/components/parameters/PlainTargetUrl'
+        - name: lang
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Transcript segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxAudioResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not YouTube / no transcript
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: YouTube audio — URL in JSON body
+      operationId: reboxAudioPlainPost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              additionalProperties: true
+              properties:
+                url: { type: string }
+                lang: { type: string }
+      responses:
+        '200':
+          description: Transcript segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxAudioResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not YouTube / no transcript
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
   /rebox/{encodedUrl}/text:
     get:
@@ -397,6 +667,14 @@ components:
       bearerFormat: opaque
 
   parameters:
+    PlainTargetUrl:
+      name: url
+      in: query
+      required: true
+      description: |
+        Full target URL as one string. If it contains `?`, `&`, or `#`, encode the **value** with `encodeURIComponent` once (standard query encoding).
+      schema:
+        type: string
     EncodedUrl:
       name: encodedUrl
       in: path
