@@ -125,6 +125,8 @@ docker run --rm -p 3000:3000 -e NODE_ENV=production rebox
 
 Secrets and one-time GCP setup: **[docs/SECRETS-AND-DEPLOY.md](docs/SECRETS-AND-DEPLOY.md)**.
 
+Publishing **`@rebox.me/rebox`** from Actions needs a token that does not require a browser OTP (granular or Automation token — see **[docs/NPM-ORG.md](docs/NPM-ORG.md)**).
+
 ---
 
 ## License

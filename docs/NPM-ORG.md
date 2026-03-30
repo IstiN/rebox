@@ -88,6 +88,7 @@ npx @rebox.me/rebox --help
 | `404 Not Found` on `PUT .../@scope%2fpackage` | Often **wrong scope in `package.json`** (e.g. old `@rebox/rebox`) or CI ran an **old commit**. On GitHub: **Actions → workflow → Re-run** only after **main** has `"name": "@rebox.me/rebox"`. Also: token must allow **write** to that exact package (granular token) or your user must be in org **`rebox.me`** with publish rights. |
 | `403 Forbidden` / not allowed to publish | Your npm user must be in org **`@rebox.me`** with permission to publish; token must include **write** for **`@rebox.me/rebox`**. |
 | `402 Payment Required` | Scoped **private** package without paid org — use `--access public` or org with private seats. |
+| `EOTP` / “requires a one-time password” in CI | Your npm account has **2FA** enabled and the token in **`NPM_TOKEN`** is not exempt. Use a **granular access token** with **Read and write** on **`@rebox.me/rebox`** only (see §3 Option A), or an **Automation** classic token — those publish from CI without an OTP. Replace the GitHub secret and re-run the workflow. |
 | Name already exists | Bump `version` in `package.json` or unpublish within 72h window (npm policy). |
 
 Official docs: [Creating and viewing access tokens](https://docs.npmjs.com/creating-and-viewing-access-tokens), [Scoped packages](https://docs.npmjs.com/about-scopes).
