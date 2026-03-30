@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Playwright Chromium (unit tests use buildApp / browser warm)
+        run: npx playwright install chromium --only-shell
+
       - name: Typecheck build
         run: npm run build
 
