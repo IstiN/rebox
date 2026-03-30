@@ -12,12 +12,12 @@ info:
 
     Defaults: `wait_until=domcontentloaded`, `timeout_ms=60000`, **`settle_ms`** from env `REBOX_DEFAULT_SETTLE_MS` (default **2000** ms).
 
-    Image body is raw PNG/WebP bytes; optional query `save_as`, `filename_source`, `fullPage`, etc.
+    Image body is raw PNG/WebP bytes; optional query `save_as`, `filename_source`, `fullPage`, `scroll_full_page`, etc. Full-page shots default to scrolling the page (up to **`REBOX_FULL_PAGE_SCROLL_MAX_MS`**, default **25000** ms) so lazy blocks (e.g. Habr comments) expand before capture.
 
     When `REBOX_API_KEYS` is set: send **`X-API-Key`** or **`Authorization: Bearer`** token (also **`Authorization: ApiKey`**). Same routes accept **GET** or **POST**; on POST, optional JSON body overrides query for duplicate keys.
 
     SSRF checks on every target URL.
-  version: 0.5.1
+  version: 0.5.2
 
 servers:
   - url: /
@@ -181,6 +181,10 @@ paths:
         - name: fullPage
           in: query
           schema: { type: boolean, default: true }
+        - name: scroll_full_page
+          in: query
+          description: Scroll to load lazy content before a full-page capture (default true). Ignored when fullPage is false.
+          schema: { type: boolean, default: true }
         - name: format
           in: query
           schema:
@@ -247,6 +251,7 @@ paths:
               properties:
                 url: { type: string }
                 fullPage: { type: boolean }
+                scroll_full_page: { type: boolean }
                 format: { type: string, enum: [png, webp] }
       responses:
         '200':
@@ -467,6 +472,10 @@ paths:
           in: query
           description: Full scrollable page screenshot. Pass `false` for viewport-only.
           schema: { type: boolean, default: true }
+        - name: scroll_full_page
+          in: query
+          description: Scroll to load lazy content before a full-page capture (default true). Ignored when fullPage is false.
+          schema: { type: boolean, default: true }
         - name: format
           in: query
           schema:
@@ -532,6 +541,10 @@ paths:
         - name: fullPage
           in: query
           description: Full scrollable page screenshot. Pass `false` for viewport-only.
+          schema: { type: boolean, default: true }
+        - name: scroll_full_page
+          in: query
+          description: Scroll to load lazy content before a full-page capture (default true). Ignored when fullPage is false.
           schema: { type: boolean, default: true }
         - name: format
           in: query

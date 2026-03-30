@@ -42,6 +42,7 @@ const textQuerySchema = navOptionsSchema.extend({
 
 const imageQuerySchema = navOptionsSchema.extend({
   fullPage: z.enum(['true', 'false']).optional(),
+  scroll_full_page: z.enum(['true', 'false']).optional(),
   format: z.enum(['png', 'webp']).optional(),
   maxHeightPx: z.coerce.number().int().positive().optional(),
   quality: z.coerce.number().int().min(1).max(100).optional(),
@@ -325,6 +326,7 @@ export async function buildApp(
       fullPage: q.fullPage !== 'false',
       maxHeightPx: q.maxHeightPx,
       quality: q.quality,
+      scrollFullPage: q.scroll_full_page !== 'false',
     };
 
     const { snapshot, image } = await resolveRender(cache, engine, nav, spec);

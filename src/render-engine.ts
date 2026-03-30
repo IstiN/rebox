@@ -2,6 +2,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 
 import type { Config } from './config.js';
 import { ReboxHttpError } from './errors.js';
+import { scrollPageForLazyContent } from './full-page-scroll.js';
 import type { NavParams, RenderSnapshot, ScreenshotSpec } from './render-cache.js';
 import { screenshotCacheKey } from './render-cache.js';
 
@@ -106,6 +107,14 @@ export class RenderEngine {
         (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
         nav.settleMs,
       );
+    }
+
+    const shouldScrollForShot =
+      screenshot?.fullPage &&
+      screenshot.scrollFullPage !== false &&
+      this.cfg.fullPageScrollMaxMs > 0;
+    if (shouldScrollForShot) {
+      await scrollPageForLazyContent(page, this.cfg.fullPageScrollMaxMs);
     }
 
     let html: string;

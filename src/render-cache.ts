@@ -9,6 +9,8 @@ export interface ScreenshotSpec {
   fullPage: boolean;
   maxHeightPx?: number;
   quality?: number;
+  /** When true (default for full-page shots), scroll to expand lazy content before capture */
+  scrollFullPage?: boolean;
 }
 
 export interface NavParams {

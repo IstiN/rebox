@@ -30,3 +30,32 @@ export async function readErrorBody(res: Response): Promise<string> {
     return res.statusText;
   }
 }
+
+/**
+ * POST plain `/rebox/{kind}`; on 404 retry legacy `/rebox/{encodeURIComponent(url)}/{kind}` without url in JSON.
+ */
+export async function postRebox(
+  base: string,
+  kind: 'text' | 'image' | 'audio',
+  targetUrl: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<Response> {
+  const h = { ...headers };
+  if (!h['Content-Type'] && !h['content-type']) {
+    h['Content-Type'] = 'application/json';
+  }
+  const fullBody = { ...body, url: targetUrl };
+  let res = await fetch(`${base}/rebox/${kind}`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify(fullBody),
+  });
+  if (res.status !== 404) return res;
+  const { url: _u, ...rest } = fullBody;
+  return fetch(`${base}/rebox/${encodeURIComponent(targetUrl)}/${kind}`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify(rest),
+  });
+}

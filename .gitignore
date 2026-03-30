@@ -9,6 +9,9 @@ playwright-report/
 test-results/
 .idea/
 
+# Local screenshot experiments (not for the repo)
+habr-*.png
+
 # Never commit credentials (GCP SA JSON, PEM keys, local gcloud exports)
 *.pem
 *-key.json

@@ -19,6 +19,8 @@ const envSchema = z.object({
   CACHE_TTL_MS: z.coerce.number().default(120_000),
   MAX_CONCURRENT_RENDERS: z.coerce.number().default(2),
   REBOX_DEFAULT_SETTLE_MS: z.coerce.number().min(0).max(30_000).default(2000),
+  /** 0 disables pre-screenshot scrolling for full-page captures */
+  REBOX_FULL_PAGE_SCROLL_MAX_MS: z.coerce.number().int().min(0).max(120_000).default(25_000),
   ALLOW_HTTP: z
     .string()
     .optional()
@@ -35,6 +37,8 @@ export interface Config {
   maxConcurrentRenders: number;
   /** Extra wait after navigation so SPAs can hydrate before HTML/screenshot. */
   defaultSettleMs: number;
+  /** Time budget for scrolling to load lazy content before a full-page screenshot */
+  fullPageScrollMaxMs: number;
   allowHttp: boolean;
 }
 
@@ -49,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cacheTtlMs: e.CACHE_TTL_MS,
     maxConcurrentRenders: e.MAX_CONCURRENT_RENDERS,
     defaultSettleMs: e.REBOX_DEFAULT_SETTLE_MS,
+    fullPageScrollMaxMs: e.REBOX_FULL_PAGE_SCROLL_MAX_MS,
     allowHttp: Boolean(e.ALLOW_HTTP),
   };
 }

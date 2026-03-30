@@ -17,5 +17,6 @@ describe('loadConfig', () => {
     expect(c.port).toBe(3000);
     expect(c.apiKeys).toEqual([]);
     expect(c.allowHttp).toBe(false);
+    expect(c.fullPageScrollMaxMs).toBe(25_000);
   });
 });
