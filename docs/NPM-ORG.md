@@ -12,6 +12,24 @@ This package is published as **`@rebox/rebox`**. The CLI command stays **`rebox`
 
 Add any teammates under **Organization → Members** with **Developer** (can publish) or **Owner**.
 
+### If you get **HTTP 400** (or the form fails) on org creation
+
+npm’s site often returns **400 Bad Request** without a clear message. Try this order:
+
+1. **Confirm your email** on the npm account (avatar → **Account** → email must be **verified**).
+2. **Turn off VPN / ad blockers** for `npmjs.com` and try again, or another browser / incognito.
+3. **Name conflict:** the string `rebox` may already be an **npm username**, **organization**, or **reserved**. Try another org name (e.g. `rebox-dev`, `reboxjs`, `getrebox`), then set in `package.json`:
+   ```json
+   "name": "@your-org-name/rebox"
+   ```
+4. **Billing / region:** if you picked a **paid** plan by mistake, fix payment or choose **Unlimited public packages** (free).
+5. Still failing: [npm status](https://status.npmjs.org/) and [npm support](https://www.npmjs.com/support) (or [GitHub npm/feedback](https://github.com/npm/feedback)).
+
+**You do not need an org** to publish: use your **personal scope** instead (same token flow):
+
+- Pick your npm **username** (e.g. `istiN`) → package name **`@istiN/rebox`**.
+- Update `"name"` in `package.json`, then `npm publish --access public`.
+
 ## 2. Link the GitHub repo (optional)
 
 Under **Organization → Packages** you can connect GitHub for visibility; not required for `npm publish`.
