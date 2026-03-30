@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import pc from 'picocolors';
 
 import { buildAuthHeaders, normalizeBaseUrl, readErrorBody, type HeaderStyle } from './cli-client.js';
+import { applyUrlShorthand } from './cli-shorthand.js';
 
 function readPkgVersion(): string {
   try {
@@ -70,7 +71,14 @@ async function main(): Promise<void> {
 
   program
     .name('rebox')
-    .description(pc.bold('rebox') + ' — CLI for the rebox HTTP render API')
+    .description(
+      pc.bold('rebox') +
+        ' — CLI for the rebox HTTP render API\n' +
+        pc.dim('Shorthand: ') +
+        pc.cyan('rebox https://example.com/') +
+        pc.dim(' → same as ') +
+        pc.cyan('rebox text https://example.com/'),
+    )
     .helpCommand(false)
     .version(version, '-V, --version', 'print version')
     .helpOption('-h, --help', 'print help')
@@ -247,7 +255,8 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(j, null, 2));
     });
 
-  await program.parseAsync(process.argv);
+  const argv = applyUrlShorthand(process.argv.slice(2));
+  await program.parseAsync([process.argv[0]!, process.argv[1]!, ...argv]);
 }
 
 main().catch((e) => {

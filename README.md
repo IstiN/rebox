@@ -22,6 +22,9 @@ export REBOX_API_KEY=your-key   # if the server uses REBOX_API_KEYS
 Examples:
 
 ```bash
+# same as: rebox text https://example.com/
+rebox https://example.com/
+
 rebox health
 rebox ready
 rebox docs --open
