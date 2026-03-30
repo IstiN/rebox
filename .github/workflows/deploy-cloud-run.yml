@@ -3,6 +3,8 @@
 #                       Artifact Registry Writer, Cloud Run Admin, Service Account User
 #                       (on the Cloud Run runtime SA if it differs from deployer)
 #   GCP_PROJECT_ID    — e.g. ai-native-478811
+#   REBOX_API_KEYS    — optional comma-separated keys; when set, /rebox/* and / require
+#                       X-API-Key or Authorization: Bearer (does not replace Cloud Run IAM)
 
 name: Deploy to Cloud Run
 
@@ -55,9 +57,14 @@ jobs:
       - name: Deploy to Cloud Run
         env:
           PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REBOX_API_KEYS: ${{ secrets.REBOX_API_KEYS }}
         run: |
           set -euo pipefail
           IMAGE="${{ env.REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.AR_REPO }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}"
+          ENV_VARS="NODE_ENV=production,HOST=0.0.0.0"
+          if [ -n "${REBOX_API_KEYS:-}" ]; then
+            ENV_VARS="${ENV_VARS},REBOX_API_KEYS=${REBOX_API_KEYS}"
+          fi
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image "$IMAGE" \
             --region ${{ env.REGION }} \
@@ -70,4 +77,4 @@ jobs:
             --concurrency 1 \
             --max-instances 1 \
             --port 3000 \
-            --set-env-vars NODE_ENV=production,HOST=0.0.0.0
+            --set-env-vars "$ENV_VARS"

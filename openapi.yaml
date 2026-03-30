@@ -14,7 +14,9 @@ info:
 
     Image body is raw PNG/WebP bytes; optional query `save_as`, `filename_source`, `fullPage`, etc.
 
-    Production: `X-API-Key` when `REBOX_API_KEYS` is set. SSRF checks on every target URL.
+    When `REBOX_API_KEYS` is set: send **`X-API-Key`** or **`Authorization: Bearer`** token (also **`Authorization: ApiKey`**). Same routes accept **GET** or **POST**; on POST, optional JSON body overrides query for duplicate keys.
+
+    SSRF checks on every target URL.
   version: 0.4.0
 
 servers:
@@ -27,6 +29,7 @@ tags:
 
 security:
   - ApiKeyAuth: []
+  - BearerAuth: []
 
 paths:
   /health:
@@ -94,6 +97,66 @@ paths:
         - name: debug
           in: query
           schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: JSON with `visibleText` (DOM) and Defuddle `article`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxTextResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: Same as GET — use POST; options in query and/or JSON body (body wins on duplicate keys)
+      operationId: reboxTextPost
+      parameters:
+        - $ref: '#/components/parameters/EncodedUrl'
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+        - name: markdown
+          in: query
+          schema: { type: boolean, default: true }
+        - name: separateMarkdown
+          in: query
+          schema: { type: boolean, default: false }
+        - name: includeRawHtml
+          in: query
+          schema: { type: boolean, default: false }
+        - name: maxRawHtmlChars
+          in: query
+          schema: { type: integer }
+        - name: content_selector
+          in: query
+          schema: { type: string }
+        - name: debug
+          in: query
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Optional fields mirroring query (e.g. timeout_ms, settle_ms)
       responses:
         '200':
           description: JSON with `visibleText` (DOM) and Defuddle `article`
@@ -183,6 +246,79 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: Same as GET — raw image bytes; options in query and/or JSON body
+      operationId: reboxImagePost
+      parameters:
+        - $ref: '#/components/parameters/EncodedUrl'
+        - $ref: '#/components/parameters/WaitUntil'
+        - $ref: '#/components/parameters/TimeoutMs'
+        - $ref: '#/components/parameters/SettleMs'
+        - $ref: '#/components/parameters/ViewportWidth'
+        - $ref: '#/components/parameters/ViewportHeight'
+        - $ref: '#/components/parameters/Locale'
+        - $ref: '#/components/parameters/UserAgent'
+        - name: fullPage
+          in: query
+          description: Full scrollable page screenshot. Pass `false` for viewport-only.
+          schema: { type: boolean, default: true }
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [png, webp]
+            default: png
+        - name: maxHeightPx
+          in: query
+          schema: { type: integer }
+        - name: quality
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - name: save_as
+          in: query
+          description: Optional filename stem for Save dialog (extension added automatically).
+          schema: { type: string, maxLength: 200 }
+        - name: filename_source
+          in: query
+          description: How to pick the default stem if `save_as` is omitted — `host` (e.g. learn.ai-native.pro) or `title` (slug from page title).
+          schema:
+            type: string
+            enum: [host, title]
+            default: host
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Raw image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '408':
+          $ref: '#/components/responses/Timeout'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
   /rebox/{encodedUrl}/audio:
     get:
@@ -213,6 +349,41 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/BadGateway'
+    post:
+      tags: [rebox]
+      summary: Same as GET — YouTube transcript JSON; optional JSON body for lang etc.
+      operationId: reboxAudioPost
+      parameters:
+        - $ref: '#/components/parameters/EncodedUrl'
+        - name: lang
+          in: query
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Transcript segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReboxAudioResponse'
+        '304':
+          description: Not modified
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No transcript / not YouTube
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
 components:
   securitySchemes:
@@ -220,6 +391,10 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
 
   parameters:
     EncodedUrl:

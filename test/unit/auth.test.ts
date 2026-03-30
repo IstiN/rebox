@@ -42,4 +42,20 @@ describe('API key auth', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/html/);
   });
+
+  it('allows API with Authorization Bearer', async () => {
+    const cfg = loadConfig({
+      PORT: '0',
+      HOST: '127.0.0.1',
+      REBOX_API_KEYS: 'secret-key',
+    });
+    const { app } = await buildApp(cfg, { logger: false });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/',
+      headers: { authorization: 'Bearer secret-key' },
+    });
+    await app.close();
+    expect(res.statusCode).toBe(200);
+  });
 });

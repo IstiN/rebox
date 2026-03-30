@@ -1,9 +1,10 @@
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 
+import { extractClientApiKey } from './auth-util.js';
 import type { Config } from './config.js';
 import { runDefuddle } from './defuddle-service.js';
 import { errorBody, newRequestId, ReboxHttpError, type ErrorCode } from './errors.js';
@@ -56,6 +57,20 @@ function flattenQuery(q: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(q)) {
     out[k] = Array.isArray(v) ? v[0] : v;
+  }
+  return out;
+}
+
+/** GET: query only. POST: JSON body fields override query for the same keys. */
+function mergeReboxQuery(
+  method: string,
+  query: Record<string, unknown>,
+  body: unknown,
+): Record<string, unknown> {
+  const out = flattenQuery(query);
+  if (method !== 'POST') return out;
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    Object.assign(out, flattenQuery(body as Record<string, unknown>));
   }
   return out;
 }
@@ -133,11 +148,15 @@ export async function buildApp(
     app.addHook('onRequest', async (req, reply) => {
       const p = req.url.split('?')[0] ?? req.url;
       if (p === '/health' || p === '/ready' || p.startsWith('/docs')) return;
-      const key = req.headers['x-api-key'];
-      if (typeof key !== 'string' || !cfg.apiKeys.includes(key)) {
+      const key = extractClientApiKey(req.headers as { 'x-api-key'?: string; authorization?: string });
+      if (!key || !cfg.apiKeys.includes(key)) {
         const requestId = req.id;
         reply.status(401).send(
-          errorBody('UNAUTHORIZED', 'Invalid or missing X-API-Key', requestId),
+          errorBody(
+            'UNAUTHORIZED',
+            'Invalid or missing credentials: send X-API-Key or Authorization: Bearer <key>',
+            requestId,
+          ),
         );
       }
     });
@@ -186,11 +205,11 @@ export async function buildApp(
         health: 'GET /health',
         ready: 'GET /ready',
         docs: 'GET /docs',
-        text: `GET /rebox/${ex}/text`,
-        image: `GET /rebox/${ex}/image`,
-        audio: `GET /rebox/${yt}/audio`,
+        text: `GET|POST /rebox/${ex}/text`,
+        image: `GET|POST /rebox/${ex}/image`,
+        audio: `GET|POST /rebox/${yt}/audio`,
       },
-      note: 'Target URL is the first path segment after /rebox/, encoded with encodeURIComponent (slashes become %2F). Options stay in ?query. Rebuild if routes 404: npm run build && node dist/server.js',
+      note: 'Target URL is the first path segment after /rebox/, encoded with encodeURIComponent (slashes become %2F). Options: query string and/or JSON body on POST. Optional auth: REBOX_API_KEYS → X-API-Key or Authorization: Bearer.',
     };
   });
 
@@ -205,12 +224,16 @@ export async function buildApp(
     }
   });
 
-  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/text', async (req, reply) => {
+  const textHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
     const requestId = req.id;
     const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const q = textQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    const q = textQuerySchema.parse(merged);
     const nav = parseNavParams(href, q, cfg);
 
     const { snapshot } = await resolveRender(cache, engine, nav, null);
@@ -259,13 +282,23 @@ export async function buildApp(
       .header('cache-control', 'private, max-age=60')
       .header('x-rebox-final-url', snapshot.finalUrl);
     return reply.send(bodyObj);
+  };
+
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/rebox/:encodedUrl/text',
+    handler: textHandler,
   });
 
-  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/image', async (req, reply) => {
+  const imageHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
     const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const q = imageQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    const q = imageQuerySchema.parse(merged);
     const nav = parseNavParams(href, q, cfg);
     const spec: ScreenshotSpec = {
       format: q.format === 'webp' ? 'webp' : 'png',
@@ -307,14 +340,24 @@ export async function buildApp(
       .header('content-disposition', contentDisposition)
       .type(image.mimeType)
       .send(image.buffer);
+  };
+
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/rebox/:encodedUrl/image',
+    handler: imageHandler,
   });
 
-  app.get<{ Params: { encodedUrl: string } }>('/rebox/:encodedUrl/audio', async (req, reply) => {
+  const audioHandler = async (
+    req: FastifyRequest<{ Params: { encodedUrl: string } }>,
+    reply: FastifyReply,
+  ) => {
     const requestId = req.id;
     const href = decodeUrlPathSegment(req.params.encodedUrl);
     assertParsableAbsoluteUrl(href);
     await assertSafeUrl(href, cfg);
-    const q = audioQuerySchema.parse(flattenQuery(req.query as Record<string, unknown>));
+    const merged = mergeReboxQuery(req.method, req.query as Record<string, unknown>, req.body);
+    const q = audioQuerySchema.parse(merged);
 
     const videoId = extractYoutubeVideoId(href);
     if (!videoId) {
@@ -343,6 +386,12 @@ export async function buildApp(
 
     reply.header('etag', etag).header('cache-control', 'private, max-age=300');
     return reply.send(bodyObj);
+  };
+
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/rebox/:encodedUrl/audio',
+    handler: audioHandler,
   });
 
   app.addHook('onClose', async () => {
