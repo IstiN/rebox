@@ -22,6 +22,7 @@
   "files": [
     "bin",
     "dist",
+    "scripts/generate-rebox-api-key.mjs",
     "openapi.yaml",
     "LICENSE",
     "README.md"
@@ -35,6 +36,7 @@
     "dev": "tsx watch src/server.ts",
     "cli": "npm run build && node bin/rebox.mjs",
     "cli:dev": "tsx src/cli.ts",
+    "generate-api-key": "node scripts/generate-rebox-api-key.mjs",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:unit": "vitest run test/unit",

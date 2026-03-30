@@ -1,0 +1,55 @@
+# Publish the rebox package to npm.
+#
+# Secrets (repository → Settings → Secrets → Actions):
+#   NPM_TOKEN  — npm "Automation" or "Publish" token (https://www.npmjs.com/settings/~/tokens)
+#
+# First-time package name: ensure the name "rebox" is available on npm or change "name" in package.json.
+
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run npm publish --dry-run only'
+        required: false
+        default: 'false'
+        type: boolean
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+        run: npm publish --dry-run --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm
+        if: |
+          (github.event_name == 'release') ||
+          (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
