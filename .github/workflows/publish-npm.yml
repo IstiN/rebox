@@ -3,7 +3,7 @@
 # Secrets (repository → Settings → Secrets → Actions):
 #   NPM_TOKEN  — npm "Automation" or "Publish" token (https://www.npmjs.com/settings/~/tokens)
 #
-# First-time package name: ensure the name "rebox" is available on npm or change "name" in package.json.
+# Package name: @rebox/rebox — create org "rebox" on npm and token per docs/NPM-ORG.md
 
 name: Publish to npm
 

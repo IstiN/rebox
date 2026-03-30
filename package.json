@@ -1,5 +1,5 @@
 {
-  "name": "rebox",
+  "name": "@rebox/rebox",
   "version": "0.5.0",
   "description": "Headless render microservice (text, screenshot, YouTube transcript) plus rebox CLI",
   "keywords": [
