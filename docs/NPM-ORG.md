@@ -85,6 +85,7 @@ npx @rebox.me/rebox --help
 
 | Error | What to do |
 |-------|------------|
+| `404 Not Found` on `PUT .../@scope%2fpackage` | Often **wrong scope in `package.json`** (e.g. old `@rebox/rebox`) or CI ran an **old commit**. On GitHub: **Actions → workflow → Re-run** only after **main** has `"name": "@rebox.me/rebox"`. Also: token must allow **write** to that exact package (granular token) or your user must be in org **`rebox.me`** with publish rights. |
 | `403 Forbidden` / not allowed to publish | Your npm user must be in org **`@rebox.me`** with permission to publish; token must include **write** for **`@rebox.me/rebox`**. |
 | `402 Payment Required` | Scoped **private** package without paid org — use `--access public` or org with private seats. |
 | Name already exists | Bump `version` in `package.json` or unpublish within 72h window (npm policy). |
