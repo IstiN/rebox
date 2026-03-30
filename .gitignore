@@ -8,3 +8,10 @@ coverage/
 playwright-report/
 test-results/
 .idea/
+
+# Never commit credentials (GCP SA JSON, PEM keys, local gcloud exports)
+*.pem
+*-key.json
+*credentials*.json
+service-account*.json
+gcloud-application-credentials.json
