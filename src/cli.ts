@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 
 import { Command } from 'commander';
 import pc from 'picocolors';
+import { z } from 'zod';
 
 import {
   buildAuthHeaders,
@@ -13,6 +14,10 @@ import {
 } from './cli-client.js';
 import { ensureLocalReboxServer } from './cli-local-server.js';
 import { applyUrlShorthand, sanitizePastedUrl } from './cli-shorthand.js';
+import { getCliDirectRunner, shutdownCliDirectRunner } from './cli-direct-runner.js';
+import { ReboxHttpError } from './errors.js';
+import { resolveOpenApiSpecPath } from './openapi-path.js';
+import { SsrfError } from './ssrf.js';
 
 function readPkgVersion(): string {
   try {
@@ -41,7 +46,14 @@ function resolveRootOpts(program: Command): RootOpts {
   };
 }
 
-function resolveBaseUrl(program: Command): string {
+/** Use HTTP to a rebox server (Cloud Run or local `npm start`). Otherwise run Chromium in-process. */
+function useRemoteHttp(program: Command): boolean {
+  if (process.env.REBOX_USE_HTTP === '1') return true;
+  const r = resolveRootOpts(program);
+  return Boolean(r.baseUrl?.trim());
+}
+
+function resolveRemoteBaseUrl(program: Command): string {
   const r = resolveRootOpts(program);
   const raw = r.baseUrl?.trim() || 'http://127.0.0.1:3000';
   return normalizeBaseUrl(raw);
@@ -63,7 +75,7 @@ function autoServerEnabled(program: Command): boolean {
 }
 
 async function apiBase(program: Command): Promise<string> {
-  const base = resolveBaseUrl(program);
+  const base = resolveRemoteBaseUrl(program);
   return ensureLocalReboxServer(base, { autoServer: autoServerEnabled(program) });
 }
 
@@ -115,27 +127,33 @@ async function main(): Promise<void> {
     .name('rebox')
     .description(
       pc.bold('rebox') +
-        ' — CLI for the rebox HTTP render API\n' +
+        ' — render URLs locally (Chromium in-process) or via HTTP API\n' +
+        pc.dim('Default: ') +
+        pc.cyan('in-process') +
+        pc.dim(' (no server). Use ') +
+        pc.cyan('-b') +
+        pc.dim(' / ') +
+        pc.cyan('REBOX_BASE_URL') +
+        pc.dim(' or ') +
+        pc.cyan('REBOX_USE_HTTP=1') +
+        pc.dim(' for remote HTTP.') +
+        '\n' +
         pc.dim('Shorthand: ') +
         pc.cyan('rebox https://example.com/') +
-        pc.dim(' → same as ') +
-        pc.cyan('rebox text https://example.com/') +
-        pc.dim('; YouTube → transcript') +
+        pc.dim(' → text; YouTube URL → transcript.') +
         '\n' +
-        pc.dim('Localhost API: if nothing is listening, rebox starts ') +
+        pc.dim('Remote + localhost: auto-starts ') +
         pc.dim('dist/server.js') +
-        pc.dim(' automatically (disable: ') +
+        pc.dim(' when needed (') +
         pc.cyan('--no-auto-server') +
-        pc.dim(' or ') +
-        pc.cyan('REBOX_AUTO_SERVER=0') +
-        pc.dim(').'),
+        pc.dim(' to disable).'),
     )
     .helpCommand(false)
     .version(version, '-V, --version', 'print version')
     .helpOption('-h, --help', 'print help')
     .option(
       '-b, --base-url <url>',
-      'API base URL (env REBOX_BASE_URL, default http://127.0.0.1:3000)',
+      'HTTP API base URL (env REBOX_BASE_URL); omit for in-process rendering',
     )
     .option('-k, --api-key <key>', 'API key (env REBOX_API_KEY)')
     .option(
@@ -144,7 +162,7 @@ async function main(): Promise<void> {
     )
     .option(
       '--no-auto-server',
-      'do not start a local rebox server when the API URL is localhost (env REBOX_AUTO_SERVER=0)',
+      'with HTTP on localhost: do not spawn a server (env REBOX_AUTO_SERVER=0)',
     )
     .configureHelp({
       sortSubcommands: true,
@@ -154,57 +172,101 @@ async function main(): Promise<void> {
 
   program
     .command('health')
-    .description('GET /health — liveness')
+    .description('liveness (HTTP GET /health or in-process stub)')
     .action(async () => {
-      const base = await apiBase(program);
-      const res = await fetch(`${base}/health`);
-      if (!res.ok) await failResponse(res, 'health');
-      const j = await res.json();
-      console.log(pc.green('ok'), JSON.stringify(j, null, 2));
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const res = await fetch(`${base}/health`);
+        if (!res.ok) await failResponse(res, 'health');
+        const j = await res.json();
+        console.log(pc.green('ok'), JSON.stringify(j, null, 2));
+        return;
+      }
+      console.log(pc.green('ok'), JSON.stringify({ status: 'ok', mode: 'direct' }, null, 2));
     });
 
   program
     .command('ready')
-    .description('GET /ready — browser readiness')
+    .description('browser readiness (HTTP GET /ready or warm local Chromium)')
     .action(async () => {
-      const base = await apiBase(program);
-      const res = await fetch(`${base}/ready`);
-      if (!res.ok) await failResponse(res, 'ready');
-      const j = await res.json();
-      console.log(pc.green('ok'), JSON.stringify(j, null, 2));
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const res = await fetch(`${base}/ready`);
+        if (!res.ok) await failResponse(res, 'ready');
+        const j = await res.json();
+        console.log(pc.green('ok'), JSON.stringify(j, null, 2));
+        return;
+      }
+      await getCliDirectRunner().warmBrowser();
+      console.log(
+        pc.green('ok'),
+        JSON.stringify({ status: 'ready', browser: 'chromium', mode: 'direct' }, null, 2),
+      );
     });
 
   program
     .command('info')
-    .description('GET / — service route map (requires API key if configured on server)')
+    .description('route map over HTTP, or CLI hint in direct mode')
     .action(async () => {
-      const base = await apiBase(program);
-      const res = await fetch(`${base}/`, { headers: mergeHeaders(program) });
-      if (!res.ok) await failResponse(res, 'info');
-      const j = await res.json();
-      console.log(JSON.stringify(j, null, 2));
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const res = await fetch(`${base}/`, { headers: mergeHeaders(program) });
+        if (!res.ok) await failResponse(res, 'info');
+        const j = await res.json();
+        console.log(JSON.stringify(j, null, 2));
+        return;
+      }
+      console.log(
+        JSON.stringify(
+          {
+            mode: 'direct',
+            service: 'rebox-cli',
+            version: readPkgVersion(),
+            note: 'Rendering runs in this process. Use -b or REBOX_BASE_URL for HTTP API + route map.',
+          },
+          null,
+          2,
+        ),
+      );
     });
 
   program
     .command('docs')
-    .description('print Swagger UI URL; use --open to launch browser')
+    .description('Swagger UI URL (HTTP) or hint (direct)')
     .option('--open', 'open in default browser')
     .action(async (opts: { open?: boolean }) => {
-      const base = await apiBase(program);
-      const url = `${base}/docs/`;
-      console.log(url);
-      if (opts.open) openUrl(url);
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const url = `${base}/docs/`;
+        console.log(url);
+        if (opts.open) openUrl(url);
+        return;
+      }
+      console.error(
+        pc.dim('Swagger UI is served by the HTTP app. Run: npm start, then open http://127.0.0.1:3000/docs/'),
+      );
+      process.exit(1);
     });
 
   program
     .command('openapi')
-    .description('fetch OpenAPI JSON from /docs/json')
+    .description('OpenAPI from server /docs/json, or bundled openapi.yaml (direct)')
     .option('-o, --output <file>', 'write to file instead of stdout')
     .action(async (opts: { output?: string }) => {
-      const base = await apiBase(program);
-      const res = await fetch(`${base}/docs/json`, { headers: mergeHeaders(program) });
-      if (!res.ok) await failResponse(res, 'openapi');
-      const text = await res.text();
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const res = await fetch(`${base}/docs/json`, { headers: mergeHeaders(program) });
+        if (!res.ok) await failResponse(res, 'openapi');
+        const text = await res.text();
+        if (opts.output) {
+          writeFileSync(opts.output, text, 'utf8');
+          console.error(pc.dim(`wrote ${opts.output}`));
+        } else {
+          console.log(text);
+        }
+        return;
+      }
+      const text = readFileSync(resolveOpenApiSpecPath(), 'utf8');
       if (opts.output) {
         writeFileSync(opts.output, text, 'utf8');
         console.error(pc.dim(`wrote ${opts.output}`));
@@ -234,16 +296,21 @@ async function main(): Promise<void> {
         },
       ) => {
         url = sanitizePastedUrl(url);
-        const base = await apiBase(program);
         const body: Record<string, unknown> = {
           timeout_ms: opts.timeoutMs,
           markdown: opts.noMarkdown ? 'false' : 'true',
         };
         if (opts.settleMs !== undefined && !Number.isNaN(opts.settleMs)) body.settle_ms = opts.settleMs;
 
-        const res = await postRebox(base, 'text', url, body, mergeHeaders(program));
-        if (!res.ok) await failResponse(res, 'text');
-        const j = (await res.json()) as TextBody;
+        let j: TextBody;
+        if (useRemoteHttp(program)) {
+          const base = await apiBase(program);
+          const res = await postRebox(base, 'text', url, body, mergeHeaders(program));
+          if (!res.ok) await failResponse(res, 'text');
+          j = (await res.json()) as TextBody;
+        } else {
+          j = await getCliDirectRunner().runText(url, body);
+        }
         if (opts.visibleOnly) {
           console.log(j.visibleText ?? '');
           return;
@@ -280,7 +347,6 @@ async function main(): Promise<void> {
         },
       ) => {
         url = sanitizePastedUrl(url);
-        const base = await apiBase(program);
         const body: Record<string, unknown> = {
           timeout_ms: opts.timeoutMs,
           format: opts.format === 'webp' ? 'webp' : 'png',
@@ -289,9 +355,16 @@ async function main(): Promise<void> {
         if (opts.scroll === false) body.scroll_full_page = 'false';
         if (opts.settleMs !== undefined && !Number.isNaN(opts.settleMs)) body.settle_ms = opts.settleMs;
 
-        const res = await postRebox(base, 'image', url, body, mergeHeaders(program));
-        if (!res.ok) await failResponse(res, 'image');
-        const buf = Buffer.from(await res.arrayBuffer());
+        let buf: Buffer;
+        if (useRemoteHttp(program)) {
+          const base = await apiBase(program);
+          const res = await postRebox(base, 'image', url, body, mergeHeaders(program));
+          if (!res.ok) await failResponse(res, 'image');
+          buf = Buffer.from(await res.arrayBuffer());
+        } else {
+          const out = await getCliDirectRunner().runImage(url, body);
+          buf = out.buffer;
+        }
         writeFileSync(opts.output, buf);
         console.error(pc.dim(`wrote ${opts.output} (${buf.length} bytes)`));
       },
@@ -305,13 +378,18 @@ async function main(): Promise<void> {
     .option('--json', 'print full JSON response')
     .action(async (url: string, opts: { lang?: string; json?: boolean }) => {
       url = sanitizePastedUrl(url);
-      const base = await apiBase(program);
       const body: Record<string, unknown> = {};
       if (opts.lang) body.lang = opts.lang;
 
-      const res = await postRebox(base, 'audio', url, body, mergeHeaders(program));
-      if (!res.ok) await failResponse(res, 'audio');
-      const j = (await res.json()) as AudioBody;
+      let j: AudioBody;
+      if (useRemoteHttp(program)) {
+        const base = await apiBase(program);
+        const res = await postRebox(base, 'audio', url, body, mergeHeaders(program));
+        if (!res.ok) await failResponse(res, 'audio');
+        j = (await res.json()) as AudioBody;
+      } else {
+        j = await getCliDirectRunner().runAudio(url, body);
+      }
       if (opts.json) {
         console.log(JSON.stringify(j, null, 2));
         return;
@@ -324,7 +402,27 @@ async function main(): Promise<void> {
   await program.parseAsync([process.argv[0]!, process.argv[1]!, ...argv]);
 }
 
-main().catch((e) => {
+async function runCli(): Promise<void> {
+  try {
+    await main();
+  } finally {
+    await shutdownCliDirectRunner();
+  }
+}
+
+runCli().catch((e) => {
+  if (e instanceof z.ZodError) {
+    console.error(pc.red(e.issues.map((i) => i.message).join('; ')));
+    process.exit(1);
+  }
+  if (e instanceof ReboxHttpError) {
+    console.error(pc.red(`${e.code}: ${e.message}`));
+    process.exit(1);
+  }
+  if (e instanceof SsrfError) {
+    console.error(pc.red(`${e.code}: ${e.message}`));
+    process.exit(1);
+  }
   console.error(pc.red(e instanceof Error ? e.message : String(e)));
   process.exit(1);
 });

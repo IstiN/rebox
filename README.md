@@ -13,7 +13,7 @@
 | Capability | What you get |
 |------------|----------------|
 | **Plain URL API** | `POST /rebox/text`, `/rebox/image`, `/rebox/audio` with JSON `{ "url": "https://…" }` — no `encodeURIComponent` in the path |
-| **CLI** | `rebox <url>` picks **text** vs **YouTube transcript** automatically; can **start a local server** when `127.0.0.1:3000` is free |
+| **CLI** | **In-process by default** (Chromium + Defuddle in the same Node process — **no HTTP server**). Optional **`-b` / `REBOX_BASE_URL` / `REBOX_USE_HTTP=1`** to use the API; then auto-start on localhost still works |
 | **Screenshots** | Full-page capture with an optional **scroll pass** so lazy sections (e.g. long comment threads) expand first — tuned via `scroll_full_page` and `REBOX_FULL_PAGE_SCROLL_MAX_MS` |
 | **Safety** | SSRF checks on every target URL |
 
@@ -38,12 +38,16 @@ npx @rebox.me/rebox --help
 
 ## CLI quick reference
 
-Point at your server (Cloud Run or local):
+**Default:** commands run **locally** in-process (downloads/runs Chromium like the server, but no `npm start`).
+
+**HTTP mode** (Cloud Run or your own `npm start`):
 
 ```bash
-export REBOX_BASE_URL=https://your-service.run.app   # optional; default http://127.0.0.1:3000
+export REBOX_BASE_URL=https://your-service.run.app   # or http://127.0.0.1:3000
 export REBOX_API_KEY=your-key                        # if the server uses REBOX_API_KEYS
 ```
+
+Shortcut: **`REBOX_USE_HTTP=1`** uses the HTTP client with base **`http://127.0.0.1:3000`** without setting `REBOX_BASE_URL`.
 
 | Invocation | Behaviour |
 |------------|-----------|
@@ -53,7 +57,7 @@ export REBOX_API_KEY=your-key                        # if the server uses REBOX_
 | `rebox image <url> -o out.png` | Screenshot; **`--no-scroll`** skips lazy-load scrolling |
 | `rebox audio <url> --json` | Raw transcript JSON |
 
-**Useful flags:** `-b` / `--base-url`, `-k` / `--api-key`, `--header-style bearer|x-api-key`, `--no-auto-server` (never spawn a local server — use when you already run `npm start` elsewhere). Example with a custom port: `PORT=3847 npm start` in one shell, then `REBOX_BASE_URL=http://127.0.0.1:3847 rebox …`.
+**Useful flags:** `-b` / `--base-url`, `-k` / `--api-key`, `--header-style bearer|x-api-key`. With HTTP on localhost only: **`--no-auto-server`** (or `REBOX_AUTO_SERVER=0`) if you already run `npm start` elsewhere. Custom port example: `PORT=3847 npm start` and `REBOX_BASE_URL=http://127.0.0.1:3847 rebox …`.
 
 From a git clone:
 
