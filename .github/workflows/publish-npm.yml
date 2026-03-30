@@ -1,9 +1,14 @@
-# Publish the rebox package to npm.
+# Publish @rebox.me/rebox using npm Trusted Publishing (OIDC) — no NPM_TOKEN, no OTP.
 #
-# Secrets (repository → Settings → Secrets → Actions):
-#   NPM_TOKEN  — npm "Automation" or "Publish" token (https://www.npmjs.com/settings/~/tokens)
+# One-time on npmjs.com: Package → @rebox.me/rebox → Settings → Trusted publishing
+#   - Provider: GitHub Actions
+#   - Repository: IstiN/rebox (must match package.json "repository.url")
+#   - Workflow filename: publish-npm.yml  (exact name, case-sensitive)
 #
-# Package name: @rebox.me/rebox — org rebox.me on npm; token per docs/NPM-ORG.md
+# Requires: npm CLI ≥ 11.5.1, Node ≥ 22.14 (see https://docs.npmjs.com/trusted-publishers )
+#
+# Remove repository secret NPM_TOKEN once OIDC works — a leftover token can still
+# trigger EOTP if npm prefers it over OIDC.
 
 name: Publish to npm
 
@@ -23,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - name: Checkout
@@ -31,8 +37,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: npm version for trusted publishing
+        run: |
+          npm install -g 'npm@^11.5.1'
+          node -v && npm -v
 
       - name: Install dependencies
         run: npm ci
@@ -40,21 +51,17 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package identity (must be @rebox.me/rebox on main)
+      - name: Package identity
         run: |
-          node -e "const p=require('./package.json'); console.log('npm publish →', p.name, p.version);"
-          npm whoami || true
+          node -e "const p=require('./package.json'); console.log('Publishing', p.name, '@', p.version);"
+          test "$(node -e "console.log(require('./package.json').name)")" = "@rebox.me/rebox"
 
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
         run: npm publish --dry-run --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC)
         if: |
           (github.event_name == 'release') ||
           (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

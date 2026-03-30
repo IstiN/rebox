@@ -1,6 +1,39 @@
-# npm organization `@rebox.me` and publish token
+# npm organization `@rebox.me` and publishing
 
 This package is published as **`@rebox.me/rebox`**. The CLI command on disk stays **`rebox`** (see `bin` in `package.json`).
+
+## Recommended: Trusted Publishing (no token, no OTP)
+
+GitHub Actions can publish with **OpenID Connect** so you do **not** need `NPM_TOKEN` and you avoid **`EOTP`** (2FA prompts) for CI.
+
+### One-time setup on npmjs.com
+
+1. Open **[npmjs.com/package/@rebox.me/rebox/access](https://www.npmjs.com/package/@rebox.me/rebox/access)** (or **Package → Settings → Trusted publishing**).
+2. Add **GitHub Actions** as trusted publisher:
+   - **Repository:** must match `package.json` → **`IstiN/rebox`** (owner + name exactly).
+   - **Workflow filename:** **`publish-npm.yml`** (exactly — same file as [`.github/workflows/publish-npm.yml`](../.github/workflows/publish-npm.yml), including `.yml`).
+3. Save. npm does not validate until the next publish.
+
+### What the repo already does
+
+The workflow sets **`permissions: id-token: write`**, uses **Node 22** and **npm ≥ 11.5.1** (required by [npm Trusted publishers](https://docs.npmjs.com/trusted-publishers)), and runs **`npm publish`** **without** `NODE_AUTH_TOKEN`.
+
+### After OIDC works
+
+- **Delete** the **`NPM_TOKEN`** repository secret if you added one earlier. A leftover token can still be picked up and cause **`EOTP`** in some setups.
+- Re-run **Actions → Publish to npm** (or publish a GitHub Release).
+
+### If publish says ENEEDAUTH / OIDC failed
+
+- Workflow name on npm must match **`publish-npm.yml`** (case-sensitive).
+- **`repository.url`** in `package.json` must be **`https://github.com/IstiN/rebox.git`** (or the same repo URL npm expects).
+- Only **GitHub-hosted** runners are supported (not self-hosted).
+
+---
+
+## Legacy: publish token (often hits `EOTP` with 2FA)
+
+If you are **not** using Trusted Publishing, you need a token in **`NPM_TOKEN`**. Classic tokens frequently trigger **`EOTP`** when the account has 2FA. Prefer **granular** “Automation”-style tokens or switch to OIDC above.
 
 ## 1. Organization
 
@@ -29,7 +62,9 @@ npm’s site often returns **400 Bad Request** without a clear message. Try this
 
 Under **Organization → Packages** you can connect GitHub for visibility; not required for `npm publish`.
 
-## 3. Create a token for GitHub Actions
+## 3. Create a token for GitHub Actions (legacy only)
+
+Prefer **Trusted Publishing** (top of this doc). If you still use a token:
 
 npm recommends **granular tokens** for CI.
 
@@ -51,14 +86,14 @@ npm recommends **granular tokens** for CI.
 
 Classic tokens have broad access to everything your user can publish; prefer granular when possible.
 
-## 4. Put the token in GitHub
+## 4. Put the token in GitHub (legacy only)
 
-Repository → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+Only if you are **not** using OIDC trusted publishing:
 
 - Name: **`NPM_TOKEN`**
 - Value: the token string
 
-The workflow [`.github/workflows/publish-npm.yml`](../.github/workflows/publish-npm.yml) uses `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` with `registry-url: https://registry.npmjs.org`.
+The current **Publish to npm** workflow is **OIDC-first** and does **not** pass `NPM_TOKEN` to `npm publish`.
 
 ## 5. First publish (local, once)
 

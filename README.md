@@ -129,7 +129,7 @@ docker run --rm -p 3000:3000 -e NODE_ENV=production rebox
 
 Secrets and one-time GCP setup: **[docs/SECRETS-AND-DEPLOY.md](docs/SECRETS-AND-DEPLOY.md)**.
 
-Publishing **`@rebox.me/rebox`** from Actions needs a token that does not require a browser OTP (granular or Automation token — see **[docs/NPM-ORG.md](docs/NPM-ORG.md)**).
+Publishing from Actions uses **npm Trusted Publishing (OIDC)** — configure once on npm (workflow file **`publish-npm.yml`**, repo **`IstiN/rebox`**), then **remove** any old **`NPM_TOKEN`** secret so publishes are not forced through OTP. Details: **[docs/NPM-ORG.md](docs/NPM-ORG.md)**.
 
 ---
 
