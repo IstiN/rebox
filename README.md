@@ -59,11 +59,11 @@ curl -sS -X POST "$BASE/rebox/text" \
 Install (includes server dependencies; large install) or use `npx`:
 
 ```bash
-npm install -g @rebox/rebox
-npx @rebox/rebox --help
+npm install -g @rebox.me/rebox
+npx @rebox.me/rebox --help
 ```
 
-Publishing under the **`@rebox`** org and **`NPM_TOKEN`**: see [docs/NPM-ORG.md](docs/NPM-ORG.md).
+Publishing under **`@rebox.me`** and **`NPM_TOKEN`**: see [docs/NPM-ORG.md](docs/NPM-ORG.md).
 
 Point at your deployment:
 

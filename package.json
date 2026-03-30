@@ -1,6 +1,6 @@
 {
-  "name": "@rebox/rebox",
-  "version": "0.5.0",
+  "name": "@rebox.me/rebox",
+  "version": "0.5.1",
   "description": "Headless render microservice (text, screenshot, YouTube transcript) plus rebox CLI",
   "keywords": [
     "playwright",

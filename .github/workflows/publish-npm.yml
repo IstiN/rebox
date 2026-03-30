@@ -3,7 +3,7 @@
 # Secrets (repository → Settings → Secrets → Actions):
 #   NPM_TOKEN  — npm "Automation" or "Publish" token (https://www.npmjs.com/settings/~/tokens)
 #
-# Package name: @rebox/rebox — create org "rebox" on npm and token per docs/NPM-ORG.md
+# Package name: @rebox.me/rebox — org rebox.me on npm; token per docs/NPM-ORG.md
 
 name: Publish to npm
 

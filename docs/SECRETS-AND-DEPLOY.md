@@ -13,7 +13,7 @@ Also set repository secret **`GCP_PROJECT_ID`** to: `ai-native-478811`.
 
 ### npm publishing
 
-Package name: **`@rebox/rebox`**. Create an npm token and org: **[docs/NPM-ORG.md](NPM-ORG.md)**. Add **`NPM_TOKEN`** in GitHub Actions secrets. Use workflow **Publish to npm** (manual or on release).
+Package name: **`@rebox.me/rebox`**. Create an npm token and org: **[docs/NPM-ORG.md](NPM-ORG.md)**. Add **`NPM_TOKEN`** in GitHub Actions secrets. Use workflow **Publish to npm** (manual or on release).
 
 ---
 
