@@ -323,13 +323,13 @@ export async function buildApp(
     }
 
     const t0 = Date.now();
-    const { segments } = await loadYoutubeTranscript(href, q.lang);
+    const { segments, captionLanguage } = await loadYoutubeTranscript(href, q.lang);
     const fetchMs = Date.now() - t0;
 
     const bodyObj = {
       videoId,
       title: undefined as string | undefined,
-      language: q.lang,
+      language: q.lang ?? captionLanguage,
       segments,
       timingsMs: { fetch: fetchMs },
       requestId,

@@ -1,8 +1,14 @@
 import { chromium, type Browser, type Page } from 'playwright';
 
+import {
+  buildChromeLikeUserAgent,
+  CHROMIUM_STEALTH_LAUNCH_ARGS,
+  patchNavigatorWebdriver,
+} from './chromium-stealth.js';
 import type { Config } from './config.js';
 import { ReboxHttpError } from './errors.js';
 import { scrollPageForLazyContent } from './full-page-scroll.js';
+import { expandNestedScrollRootsForFullPage } from './nested-scroll-unwrap.js';
 import type { NavParams, RenderSnapshot, ScreenshotSpec } from './render-cache.js';
 import { screenshotCacheKey } from './render-cache.js';
 
@@ -43,6 +49,8 @@ export class Limiter {
 
 export class RenderEngine {
   private browser: Browser | null = null;
+  /** Chrome-like UA derived from `browser.version()`; avoids HeadlessChrome default. */
+  private chromeLikeUserAgent: string | null = null;
   readonly limiter: Limiter;
 
   constructor(private readonly cfg: Config) {
@@ -58,8 +66,14 @@ export class RenderEngine {
     try {
       this.browser = await chromium.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          ...CHROMIUM_STEALTH_LAUNCH_ARGS,
+        ],
       });
+      this.chromeLikeUserAgent = buildChromeLikeUserAgent(this.browser.version());
     } catch (e) {
       throw new ReboxHttpError(
         'BROWSER_CRASH',
@@ -73,6 +87,7 @@ export class RenderEngine {
   async close(): Promise<void> {
     await this.browser?.close().catch(() => {});
     this.browser = null;
+    this.chromeLikeUserAgent = null;
   }
 
   /**
@@ -83,8 +98,9 @@ export class RenderEngine {
     const context = await browser.newContext({
       viewport: { width: nav.viewportW, height: nav.viewportH },
       locale: nav.locale,
-      userAgent: nav.userAgent,
+      userAgent: nav.userAgent ?? this.chromeLikeUserAgent ?? undefined,
     });
+    await context.addInitScript(patchNavigatorWebdriver);
     const page = await context.newPage();
     const t0 = Date.now();
     try {
@@ -107,6 +123,10 @@ export class RenderEngine {
         (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
         nav.settleMs,
       );
+    }
+
+    if (screenshot?.fullPage) {
+      await expandNestedScrollRootsForFullPage(page);
     }
 
     const shouldScrollForShot =
